@@ -7,6 +7,8 @@ import UIKit
 /// the live connection debug log.
 struct SettingsView: View {
   @Bindable var store: StoreOf<SettingsFeature>
+  /// Sheet presentations need Done; the root Settings tab does not.
+  var showsDoneButton = true
   /// Presentation-only: the "how push works / install the plugin" info sheet. Pure view
   /// state — there's no reducer behavior behind it.
   @State private var showingPushGuide = false
@@ -154,8 +156,10 @@ struct SettingsView: View {
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      ToolbarItem(placement: .confirmationAction) {
-        Button("Done") { store.send(.doneTapped) }
+      if showsDoneButton {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { store.send(.doneTapped) }
+        }
       }
     }
     .sheet(isPresented: $showingPushGuide) {

@@ -2,8 +2,9 @@ import ComposableArchitecture
 import HermesKit
 import SwiftUI
 
-/// Root view: the onboarding screen until connected, then the session list with a
-/// navigation stack that pushes chat screens.
+/// Root view: onboarding until connected, then the five-destination application shell.
+/// Chats retains the original app-owned navigation stack so running turns survive tab changes
+/// and pops under the same reducer policy as before.
 struct AppView: View {
   @Bindable var store: StoreOf<AppFeature>
   @Environment(\.scenePhase) private var scenePhase
@@ -31,24 +32,7 @@ struct AppView: View {
   private var content: some View {
     switch store.rootScreen {
     case .home:
-      if let homeStore = store.scope(state: \.home, action: \.home) {
-        NavigationStack(path: $store.scope(state: \.path, action: \.path)) {
-          SessionListView(store: homeStore)
-        } destination: { _ in
-          // The path holds only thin session-key markers — the REAL chat state lives in the
-          // app-level live-chat slot, so a running turn's socket survives pops. Defensive
-          // empty view if the slot is missing (e.g. after logout mid-pop).
-          if let chatStore = store.scope(state: \.liveChat, action: \.liveChat) {
-            ChatView(store: chatStore)
-              // The view's disappearance routes through the PARENT (never the scoped child
-              // store): `AppFeature.chatViewDisappeared` guards a nil slot (logout/quit may
-              // have cleared it while the screen was still animating away) and owns the
-              // idle-pop teardown policy — deferred here until the pop animation finished,
-              // so the outgoing screen stays rendered and no action hits an absent child.
-              .onDisappear { store.send(.chatViewDisappeared) }
-          }
-        }
-      }
+      connectedShell
     case .connecting:
       ProgressView("Connecting…")
     case .connectionFailed:
@@ -66,6 +50,79 @@ struct AppView: View {
           .navigationBarTitleDisplayMode(.inline)
       }
     }
+  }
+
+  private var connectedShell: some View {
+    TabView(selection: destinationSelection) {
+      Tab("Home", systemImage: "house", value: AppDestination.home) {
+        NavigationStack {
+          if let dashboardStore = store.scope(state: \.dashboard, action: \.dashboard) {
+            HomeView(store: dashboardStore)
+          } else {
+            ProgressView("Loading Home…")
+          }
+        }
+      }
+
+      Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: AppDestination.chats) {
+        chatsNavigation
+      }
+
+      Tab("Board", systemImage: "rectangle.3.group", value: AppDestination.board) {
+        NavigationStack {
+          UnsupportedDestinationView(
+            title: "Board",
+            systemImage: "rectangle.3.group",
+            reason: store.boardAvailability.unavailableReason
+              ?? "Board is available, but its workspace isn't included in this build yet."
+          )
+        }
+      }
+
+      Tab("Automations", systemImage: "calendar", value: AppDestination.automations) {
+        NavigationStack {
+          UnsupportedDestinationView(
+            title: "Automations",
+            systemImage: "calendar",
+            reason: store.automationsAvailability.unavailableReason
+              ?? "Automations are available, but their editor isn't included in this build yet."
+          )
+        }
+      }
+
+      Tab("Settings", systemImage: "gearshape", value: AppDestination.settings) {
+        NavigationStack {
+          if let settingsStore = store.scope(state: \.settings, action: \.settings) {
+            SettingsView(store: settingsStore, showsDoneButton: false)
+          } else {
+            ProgressView("Loading Settings…")
+          }
+        }
+      }
+    }
+  }
+
+  /// Keep Chats' pre-shell navigation structure byte-for-byte in spirit: the path still holds
+  /// thin markers, live state still belongs to `AppFeature.liveChat`, and disappearance still
+  /// routes through the parent only after the outgoing screen has finished animating.
+  private var chatsNavigation: some View {
+    NavigationStack(path: $store.scope(state: \.path, action: \.path)) {
+      if let chatsStore = store.scope(state: \.home, action: \.home) {
+        SessionListView(store: chatsStore, showsSettingsButton: false)
+      }
+    } destination: { _ in
+      if let chatStore = store.scope(state: \.liveChat, action: \.liveChat) {
+        ChatView(store: chatStore)
+          .onDisappear { store.send(.chatViewDisappeared) }
+      }
+    }
+  }
+
+  private var destinationSelection: Binding<AppDestination> {
+    Binding(
+      get: { store.selectedDestination },
+      set: { store.send(.destinationSelected($0)) }
+    )
   }
 }
 
