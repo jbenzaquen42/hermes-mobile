@@ -45,6 +45,7 @@ struct ProfileAdministrationList: View {
   let onAdd: () -> Void
   let onSelect: (ProfileSummaryPresentation) -> Void
   let onManageCapabilities: (ProfileSummaryPresentation) -> Void
+  let onManageMemory: (ProfileSummaryPresentation) -> Void
 
   var body: some View {
     Group {
@@ -130,10 +131,27 @@ struct ProfileAdministrationList: View {
             .buttonStyle(.borderless)
             .accessibilityLabel("Manage capabilities for \(profile.name)")
             .accessibilityHint("Opens Skills, Toolsets, and MCP settings")
+
+            Button {
+              onManageMemory(profile)
+            } label: {
+              Image(systemName: "brain.head.profile")
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Manage structured memory for \(profile.name)")
+            .accessibilityHint(
+              profile.isDefault
+                ? "Opens USER, MEMORY, and learned skill entries"
+                : "Shows why memory is unavailable for this custom profile"
+            )
           }
         }
       } footer: {
-        Text("Each profile has its own model, persona, skills, toolsets, and MCP servers.")
+        Text(
+          "Each profile has its own settings. Structured memory is available for the server default profile only."
+        )
       }
     }
     .refreshable { onReload() }
