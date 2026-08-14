@@ -2,8 +2,7 @@ import HermesKit
 import SwiftUI
 
 /// Settings controls for choosing what a normal composer submit does while the agent is
-/// already responding. State and persistence stay outside the view so this can bind directly
-/// to `SettingsFeature` once that reducer exposes the shared preference.
+/// already responding. State and persistence remain reducer-owned through the bindings.
 struct RunningTurnSettingsSection: View {
   @Binding var behavior: ChatFeature.MidTurnBehavior
   @Binding var queueingEnabled: Bool
