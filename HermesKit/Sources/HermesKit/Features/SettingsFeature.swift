@@ -36,6 +36,10 @@ public struct SettingsFeature {
     public var pushPlugin: PushPluginInfo?
     /// Drives the plugin-update row: button state and the result label under it.
     public var pluginUpdate: PluginUpdateStatus
+    /// Running-turn composer policy, persisted as a device-local preference. These are
+    /// seeded by `SessionListFeature` when the sheet opens so controls paint correctly.
+    public var midTurnBehavior: ChatFeature.MidTurnBehavior
+    public var queueingEnabled: Bool
 
     /// The outcome of a "send test notification" attempt, surfaced in the view/snapshots.
     public enum TestPushStatus: Equatable, Sendable {
@@ -64,7 +68,9 @@ public struct SettingsFeature {
       notificationsDenied: Bool = false,
       testPushStatus: TestPushStatus = .idle,
       pushPlugin: PushPluginInfo? = nil,
-      pluginUpdate: PluginUpdateStatus = .idle
+      pluginUpdate: PluginUpdateStatus = .idle,
+      midTurnBehavior: ChatFeature.MidTurnBehavior = .steer,
+      queueingEnabled: Bool = false
     ) {
       self.connection = connection
       self.token = connection.token ?? ""
@@ -76,6 +82,8 @@ public struct SettingsFeature {
       self.testPushStatus = testPushStatus
       self.pushPlugin = pushPlugin
       self.pluginUpdate = pluginUpdate
+      self.midTurnBehavior = midTurnBehavior
+      self.queueingEnabled = queueingEnabled
     }
 
     /// The installed plugin is behind `PushSetup.minimumPluginVersion` AND the agent can pull
@@ -150,6 +158,9 @@ public struct SettingsFeature {
       case disconnect             // token cleared → back to onboarding
       case reconnect              // reload the session list
       case tokenSaved(String)     // re-pasted token persisted
+      /// Keep an already-open/detached chat in sync; future chats read the same values from
+      /// `PreferencesClient` when the app fills its live-chat slot.
+      case chatInputPreferencesChanged(ChatFeature.MidTurnBehavior, queueingEnabled: Bool)
       /// The push guide's "Ask agent to install" — dismiss Settings and open a new chat with
       /// the install prompt pre-filled (handled up the chain by `AppFeature`).
       case installPushPlugin
@@ -306,6 +317,26 @@ public struct SettingsFeature {
         state.savedConfirmation = false
         return .none
 
+      case .binding(\.midTurnBehavior):
+        preferences.saveMidTurnBehavior(state.midTurnBehavior)
+        return .send(
+          .delegate(
+            .chatInputPreferencesChanged(
+              state.midTurnBehavior, queueingEnabled: state.queueingEnabled
+            )
+          )
+        )
+
+      case .binding(\.queueingEnabled):
+        preferences.saveQueueingEnabled(state.queueingEnabled)
+        return .send(
+          .delegate(
+            .chatInputPreferencesChanged(
+              state.midTurnBehavior, queueingEnabled: state.queueingEnabled
+            )
+          )
+        )
+
       case .binding:
         return .none
 
@@ -326,6 +357,7 @@ public struct SettingsFeature {
         preferences.saveSeenCounts([:]) // unread state is per-server; drop it too
         preferences.saveGroupingMode(.default) // reset the list grouping pref on logout
         preferences.clearSelectedProfileID() // selected profile is per-server — clear on logout
+        preferences.clearChatInputPreferences()
         chatSnapshot.wipeAll() // snapshots + turn anchors are per-server — wipe on logout
         return .merge(
           .send(.delegate(.disconnect)),

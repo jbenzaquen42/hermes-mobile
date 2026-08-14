@@ -475,6 +475,7 @@ public struct SessionListFeature {
       /// but NOT sent — used by the push "Ask agent to install" flow so the user reviews + sends.
       case createSession(initialComposerText: String?)
       case disconnect
+      case chatInputPreferencesChanged(ChatFeature.MidTurnBehavior, queueingEnabled: Bool)
       /// The user confirmed archiving this session (the optimistic removal + PATCH follow).
       /// Emitted FIRST so the parent can tear the live-chat slot down when it matches — a
       /// detached slot's socket must not keep streaming into a now-archived session.
@@ -964,7 +965,10 @@ public struct SessionListFeature {
 
       case .settingsButtonTapped:
         state.settings = SettingsFeature.State(
-          connection: state.connection, pushAvailable: state.pushAvailable
+          connection: state.connection,
+          pushAvailable: state.pushAvailable,
+          midTurnBehavior: preferences.loadMidTurnBehavior(),
+          queueingEnabled: preferences.loadQueueingEnabled()
         )
         return .none
 
@@ -1138,6 +1142,13 @@ public struct SessionListFeature {
       case .settings(.presented(.delegate(.disconnect))):
         state.settings = nil
         return .send(.delegate(.disconnect))
+
+      case let .settings(
+        .presented(.delegate(.chatInputPreferencesChanged(behavior, queueingEnabled)))
+      ):
+        return .send(
+          .delegate(.chatInputPreferencesChanged(behavior, queueingEnabled: queueingEnabled))
+        )
 
       case .settings(.presented(.delegate(.reconnect))):
         // Manual reconnect = re-fetch the list over REST.

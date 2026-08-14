@@ -12,6 +12,52 @@ import Foundation
 /// so a single in-flight assistant row is tracked; `session_id` is frame-level.
 @Reducer
 public struct ChatFeature {
+  /// What the composer's primary send action does while an agent turn is running.
+  /// Queueing is deliberately opt-in (`queueingEnabled` is false by default); choosing
+  /// `.queue` while it is disabled is therefore a safe no-op rather than an implicit
+  /// change to the server's busy-input policy.
+  public enum MidTurnBehavior: String, CaseIterable, Hashable, Sendable {
+    case steer
+    case redirect
+    case queue
+    case askEveryTime
+  }
+
+  /// Per-session capability knowledge. Transport failures leave this unknown: a timeout
+  /// cannot distinguish an unsupported server from an accepted request whose response was
+  /// lost, so only an explicit protocol verdict may permanently disable an affordance.
+  public enum GuidanceCapability: Equatable, Sendable {
+    case unknown
+    case supported
+    case unsupported
+  }
+
+  public enum GuidanceKind: Equatable, Sendable {
+    case steer
+    case redirect
+  }
+
+  /// The one guidance RPC currently awaiting acknowledgement. The original, untrimmed
+  /// `draftText` is retained so acknowledgement only clears the draft it actually sent;
+  /// edits typed while the request is in flight are never erased by a late response.
+  public struct PendingGuidance: Equatable, Sendable {
+    public var id: UUID
+    public var sessionID: String
+    public var kind: GuidanceKind
+    public var draftText: String
+    public var wireText: String
+
+    public init(
+      id: UUID, sessionID: String, kind: GuidanceKind, draftText: String, wireText: String
+    ) {
+      self.id = id
+      self.sessionID = sessionID
+      self.kind = kind
+      self.draftText = draftText
+      self.wireText = wireText
+    }
+  }
+
   @ObservableState
   public struct State: Equatable {
     /// Rows rendered when the chat first opens / after a wholesale hydrate (the bottom window).
@@ -154,6 +200,40 @@ public struct ChatFeature {
     /// view can dim the affordance while it runs.
     public var isBranching: Bool
 
+    /// Running-turn composer policy. True steering is the default; the older local queue
+    /// remains available as an explicit opt-in without participating in hydration.
+    public var midTurnBehavior: MidTurnBehavior
+    public var queueingEnabled: Bool
+    public var steeringCapability: GuidanceCapability
+    public var redirectCapability: GuidanceCapability
+    public internal(set) var pendingGuidance: PendingGuidance?
+
+    public var isGuidancePending: Bool { pendingGuidance != nil }
+
+    private var hasGuidanceText: Bool {
+      !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var canSubmitGuidance: Bool {
+      hasGuidanceText
+        && isSending
+        && !slashExecInFlight
+        && status == .ready
+        && liveSessionID != nil
+        && pendingInteraction == nil
+        && pendingGuidance == nil
+        && !isBranching
+        && pendingPasteCount == 0
+    }
+
+    public var canSteer: Bool {
+      canSubmitGuidance && steeringCapability != .unsupported
+    }
+
+    public var canRedirect: Bool {
+      canSubmitGuidance && redirectCapability != .unsupported
+    }
+
     /// Prompts queued while a turn (or slash exec) was running (#66), in send order.
     /// Client-side by design — see `QueuedPrompt`. Drained head-first by
     /// `drainQueueIfReady` when the session goes idle; rendered by `QueuedPromptsPanel`
@@ -187,10 +267,12 @@ public struct ChatFeature {
       let hasContent = !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !attachments.isEmpty
       return hasContent
+        && queueingEnabled
         && (isSending || slashExecInFlight)
         && liveSessionID != nil
         && pendingInteraction == nil
         && !isBranching
+        && pendingGuidance == nil
         && pendingPasteCount == 0
     }
 
@@ -451,6 +533,11 @@ public struct ChatFeature {
       self.commandsUnsupported = false
       self.slashExecInFlight = false
       self.isBranching = false
+      self.midTurnBehavior = .steer
+      self.queueingEnabled = false
+      self.steeringCapability = .unknown
+      self.redirectCapability = .unknown
+      self.pendingGuidance = nil
       self.pendingPasteCount = 0
       self.queuedPrompts = []
       self.isQueueParked = false
@@ -512,6 +599,7 @@ public struct ChatFeature {
         // self-heal `session.create` (two live sessions born from one seed).
         && liveSessionID != nil
         && pendingInteraction == nil
+        && pendingGuidance == nil
         // The visible send button becomes the interrupt button mid-turn, so this is
         // defence-in-depth against a `.composerSubmitted` that races the swap (a tap already
         // in flight, a stale view). A second submit while a turn streams must be a no-op (it
@@ -634,6 +722,17 @@ public struct ChatFeature {
     case activateResult(Result<ActivateResponse, GatewayError>)
     case usageResponse(Usage)
     case composerSubmitted
+    /// Explicit running-turn actions. `.composerSubmitted` routes through
+    /// `State.midTurnBehavior`; the menu sends these cases directly.
+    case steerSubmitted
+    case redirectSubmitted
+    case queueSubmitted
+    case steerResult(
+      requestID: UUID, sessionID: String, result: Result<SessionSteerResult, GatewayError>
+    )
+    case redirectResult(
+      requestID: UUID, sessionID: String, result: Result<SessionRedirectResult, GatewayError>
+    )
     case promptSubmitFailed(message: String)
     /// A self-heal re-resume/recreate landed a fresh live session id for an outbound RPC that
     /// failed with "session not found" (#17). Apply it WITHOUT a wholesale transcript rebuild
@@ -824,7 +923,7 @@ public struct ChatFeature {
 
   private enum CancelID {
     case socket, reconnect, hydrate, copyFeedback, copyIDToast, voiceLevels, voiceTimer,
-         thinkingTimer, persist
+         thinkingTimer, persist, guidance
   }
 
   /// Debounce window for write-back so heavy streaming doesn't thrash SQLite.
@@ -880,13 +979,15 @@ public struct ChatFeature {
         return releaseVoiceResources(&state)
 
       case .teardown:
+        abandonPendingGuidance(into: &state)
         return .merge(
           releaseVoiceResources(&state),
           .cancel(id: CancelID.socket),
           .cancel(id: CancelID.reconnect),
           .cancel(id: CancelID.hydrate),
           .cancel(id: CancelID.thinkingTimer),
-          .cancel(id: CancelID.persist)
+          .cancel(id: CancelID.persist),
+          .cancel(id: CancelID.guidance)
         )
 
       case .teardownSocketOnly:
@@ -903,10 +1004,12 @@ public struct ChatFeature {
         // while backgrounded after grace expiry, wasting a single-use ws-ticket).
         state.status = .reconnecting
         state.hasRequestedSession = false
+        abandonPendingGuidance(into: &state)
         return .merge(
           .cancel(id: CancelID.socket),
           .cancel(id: CancelID.reconnect),
-          .cancel(id: CancelID.hydrate)
+          .cancel(id: CancelID.hydrate),
+          .cancel(id: CancelID.guidance)
         )
 
       case .loadOlderRequested:
@@ -936,17 +1039,24 @@ public struct ChatFeature {
 
       case .gatewayClosed:
         state.hasRequestedSession = false
+        abandonPendingGuidance(into: &state)
         // Finalize anything mid-stream so a dropped socket doesn't leave a row
         // spinning forever; the transcript itself persists across the reconnect.
         finalizeInFlight(into: &state)
         // A dead session already paused us (see `.authExpired`): the stream finishing is just
         // the tail of that — don't schedule a backoff reconnect, wait for re-auth.
-        guard !state.awaitingReauth else { return .cancel(id: CancelID.thinkingTimer) }
+        guard !state.awaitingReauth else {
+          return .merge(
+            .cancel(id: CancelID.thinkingTimer),
+            .cancel(id: CancelID.guidance)
+          )
+        }
         state.status = .reconnecting
         state.reconnectAttempt += 1
         let delay = backoffDelay(attempt: state.reconnectAttempt)
         return .merge(
           .cancel(id: CancelID.thinkingTimer),
+          .cancel(id: CancelID.guidance),
           .run { [clock] send in
             try await clock.sleep(for: delay)
             await send(.reconnectTick)
@@ -973,6 +1083,7 @@ public struct ChatFeature {
       case let .sessionResult(.success(handle)):
         // `session.create` only — a fresh session has no context yet, so no usage fetch.
         // (Re-hydration of a stored session goes through `.activateResult` instead.)
+        abandonPendingGuidance(ifSessionChangesTo: handle.sessionID, into: &state)
         state.liveSessionID = handle.sessionID
         state.storedSessionID = handle.storedSessionID ?? state.storedSessionID
         state.status = .ready
@@ -1134,22 +1245,16 @@ public struct ChatFeature {
         // The queue entry freezes the whole draft; the drain replays it through the normal
         // submit pipeline (attachments, slash routing, #17 heal) once the session is idle.
         if state.isSending || state.slashExecInFlight {
-          guard state.canQueue else { return .none }
-          let queuedText = state.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-          // Degenerate "/" or "/ <payload>" fails the same local check the idle path runs —
-          // WITHOUT consuming the draft (queuing it would only fail at drain time, out of
-          // sight of the typo).
-          if SlashSuggestionFilter.isCommandShaped(queuedText), state.commandCatalog != nil,
-             parseSlashCommand(queuedText).name.isEmpty {
-            state.errorBanner = "Command failed: empty command"
+          switch state.midTurnBehavior {
+          case .steer:
+            return submitGuidance(.steer, into: &state)
+          case .redirect:
+            return submitGuidance(.redirect, into: &state)
+          case .queue:
+            return enqueueComposer(into: &state)
+          case .askEveryTime:
             return .none
           }
-          state.queuedPrompts.append(
-            QueuedPrompt(id: uuid(), text: queuedText, attachments: state.attachments)
-          )
-          state.composerText = ""
-          state.attachments = []
-          return .none
         }
         guard state.canSend, let sessionID = state.liveSessionID else { return .none }
         // Trim stray leading/trailing whitespace/newlines (soft-wrap, dictation, accidental
@@ -1160,6 +1265,25 @@ public struct ChatFeature {
         return submitDraft(
           text: text, attachments: state.attachments, fromQueue: false,
           sessionID: sessionID, state: &state
+        )
+
+      case .steerSubmitted:
+        return submitGuidance(.steer, into: &state)
+
+      case .redirectSubmitted:
+        return submitGuidance(.redirect, into: &state)
+
+      case .queueSubmitted:
+        return enqueueComposer(into: &state)
+
+      case let .steerResult(requestID, sessionID, result):
+        return handleSteerResult(
+          result, requestID: requestID, sessionID: sessionID, into: &state
+        )
+
+      case let .redirectResult(requestID, sessionID, result):
+        return handleRedirectResult(
+          result, requestID: requestID, sessionID: sessionID, into: &state
         )
 
       case let .promptSubmitFailed(message):
@@ -1184,6 +1308,7 @@ public struct ChatFeature {
         // Self-heal landed a fresh runtime id (#17). Swap it in so subsequent RPCs target the
         // valid session; do NOT touch the transcript (the retried RPC's events repaint it, and a
         // wholesale replace here would wipe the optimistic user/attachment row mid-retry).
+        abandonPendingGuidance(ifSessionChangesTo: liveSessionID, into: &state)
         state.liveSessionID = liveSessionID
         state.storedSessionID = storedSessionID ?? state.storedSessionID
         if state.branchSeed != nil {
@@ -1204,6 +1329,7 @@ public struct ChatFeature {
       case .interruptTapped:
         guard let sessionID = state.liveSessionID else { return .none }
         state.isSending = false
+        abandonPendingGuidance(into: &state)
         // A manual Stop PARKS the queue (#66): auto-firing a queued prompt right after
         // would un-stop the agent the user just stopped (desktop park-on-explicit-stop
         // parity). Stop intent also wins over a not-yet-consumed Send-now arm.
@@ -1214,6 +1340,7 @@ public struct ChatFeature {
         freezeThinking(into: &state)
         return .merge(
           .cancel(id: CancelID.thinkingTimer),
+          .cancel(id: CancelID.guidance),
           // Interrupt ends the turn — drop the anchor so it can't resurrect on hydrate.
           clearTurnAnchor(state),
           .run { [gateway] _ in
@@ -2187,9 +2314,11 @@ public struct ChatFeature {
       // (the finished stream) is suppressed via `awaitingReauth`.
       state.awaitingReauth = true
       state.status = .reconnecting
+      abandonPendingGuidance(into: &state)
       finalizeInFlight(into: &state)
       return .merge(
         .cancel(id: CancelID.reconnect),
+        .cancel(id: CancelID.guidance),
         .cancel(id: CancelID.thinkingTimer),
         .send(.delegate(.sessionExpired))
       )
@@ -2572,6 +2701,7 @@ public struct ChatFeature {
   /// is set we seed an assistant streaming row eagerly and point `streamingRowID` at it so
   /// the next `message.delta` appends to it instead of lazily creating a duplicate.
   private func applyActivate(_ response: ActivateResponse, into state: inout State) -> Effect<Action> {
+    abandonPendingGuidance(ifSessionChangesTo: response.sessionID, into: &state)
     state.liveSessionID = response.sessionID
     state.storedSessionID = response.storedSessionID ?? state.storedSessionID
     state.status = .ready
@@ -3019,6 +3149,237 @@ public struct ChatFeature {
     )
   }
 
+
+  // MARK: - Running-turn guidance
+
+  /// Start exactly one steer/redirect request without consuming the composer. The request
+  /// token and live session id travel through the result action, so a duplicated response or
+  /// an acknowledgement from a replaced session is ignored by construction.
+  private func submitGuidance(_ kind: GuidanceKind, into state: inout State) -> Effect<Action> {
+    switch kind {
+    case .steer:
+      guard state.canSteer else { return .none }
+    case .redirect:
+      guard state.canRedirect else { return .none }
+    }
+    guard let sessionID = state.liveSessionID else { return .none }
+
+    let draft = state.composerText
+    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let requestID = uuid()
+    state.pendingGuidance = PendingGuidance(
+      id: requestID, sessionID: sessionID, kind: kind, draftText: draft, wireText: text
+    )
+    state.errorBanner = nil
+
+    switch kind {
+    case .steer:
+      return steerEffect(requestID: requestID, sessionID: sessionID, text: text)
+    case .redirect:
+      return .run { [gateway] send in
+        do {
+          await send(.redirectResult(
+            requestID: requestID, sessionID: sessionID,
+            result: .success(try await gateway.redirect(sessionID, text))
+          ))
+        } catch let error as GatewayError {
+          await send(.redirectResult(
+            requestID: requestID, sessionID: sessionID, result: .failure(error)
+          ))
+        } catch {
+          await send(.redirectResult(
+            requestID: requestID, sessionID: sessionID, result: .failure(.disconnected)
+          ))
+        }
+      }
+      .cancellable(id: CancelID.guidance, cancelInFlight: true)
+    }
+  }
+
+  private func steerEffect(requestID: UUID, sessionID: String, text: String) -> Effect<Action> {
+    .run { [gateway] send in
+      do {
+        await send(.steerResult(
+          requestID: requestID, sessionID: sessionID,
+          result: .success(try await gateway.steer(sessionID, text))
+        ))
+      } catch let error as GatewayError {
+        await send(.steerResult(
+          requestID: requestID, sessionID: sessionID, result: .failure(error)
+        ))
+      } catch {
+        await send(.steerResult(
+          requestID: requestID, sessionID: sessionID, result: .failure(.disconnected)
+        ))
+      }
+    }
+    .cancellable(id: CancelID.guidance, cancelInFlight: true)
+  }
+
+  private func handleSteerResult(
+    _ result: Result<SessionSteerResult, GatewayError>, requestID: UUID,
+    sessionID: String, into state: inout State
+  ) -> Effect<Action> {
+    guard let pending = matchingGuidance(
+      requestID: requestID, sessionID: sessionID, in: state
+    ), pending.kind == .steer else { return .none }
+
+    switch result {
+    case let .success(.accepted(text)):
+      state.steeringCapability = .supported
+      acceptGuidance(text: text, pending: pending, into: &state)
+      return debouncedPersist()
+    case .success(.rejected):
+      state.steeringCapability = .supported
+      state.pendingGuidance = nil
+      state.errorBanner = "Hermes rejected the steering guidance. Your draft was kept."
+    case .success(.unsupported):
+      state.steeringCapability = .unsupported
+      state.pendingGuidance = nil
+      state.errorBanner = "Steering is not supported by this Hermes session. Your draft was kept."
+    case let .failure(error):
+      finishGuidanceFailure(error, kind: .steer, into: &state)
+      return .none
+    }
+    return .none
+  }
+
+  private func handleRedirectResult(
+    _ result: Result<SessionRedirectResult, GatewayError>, requestID: UUID,
+    sessionID: String, into state: inout State
+  ) -> Effect<Action> {
+    guard var pending = matchingGuidance(
+      requestID: requestID, sessionID: sessionID, in: state
+    ), pending.kind == .redirect else { return .none }
+
+    switch result {
+    case let .success(.redirected(text)), let .success(.queued(text)):
+      state.redirectCapability = .supported
+      acceptGuidance(text: text, pending: pending, into: &state)
+      return debouncedPersist()
+    case .success(.rejected):
+      state.redirectCapability = .supported
+      state.pendingGuidance = nil
+      state.errorBanner = "Hermes rejected the redirect. Your draft was kept."
+      return .none
+    case .success(.unsupported):
+      state.redirectCapability = .unsupported
+      // Redirect is an enhancement over steering. Fall back once only while the SAME turn
+      // and session are still active; otherwise retaining the draft is the only safe action.
+      guard state.isSending, !state.slashExecInFlight, state.status == .ready,
+            state.steeringCapability != .unsupported
+      else {
+        state.pendingGuidance = nil
+        state.errorBanner = "Redirect is not supported. Your draft was kept."
+        return .none
+      }
+      pending.kind = .steer
+      state.pendingGuidance = pending
+      return steerEffect(
+        requestID: pending.id, sessionID: pending.sessionID, text: pending.wireText
+      )
+    case let .failure(error):
+      finishGuidanceFailure(error, kind: .redirect, into: &state)
+      return .none
+    }
+  }
+
+  private func matchingGuidance(
+    requestID: UUID, sessionID: String, in state: State
+  ) -> PendingGuidance? {
+    guard let pending = state.pendingGuidance,
+          pending.id == requestID,
+          pending.sessionID == sessionID,
+          state.liveSessionID == sessionID
+    else { return nil }
+    return pending
+  }
+
+  private func acceptGuidance(
+    text: String, pending: PendingGuidance, into state: inout State
+  ) {
+    let acceptedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let renderedText = acceptedText.isEmpty ? pending.wireText : acceptedText
+    let wasAtBottomWindow = state.windowStart >= State.bottomWindowStart(count: state.transcript.count)
+    state.transcript.append(ChatRow(
+      id: uuid(), kind: .message(role: .user, text: renderedText, isComplete: true)
+    ))
+    keepThinkingLast(into: &state)
+    maintainWindowAfterStreaming(wasAtBottomWindow: wasAtBottomWindow, into: &state)
+    // Only consume the exact draft acknowledged by Hermes. A newer edit belongs to the
+    // user's next action and survives this late response.
+    if state.composerText == pending.draftText { state.composerText = "" }
+    state.pendingGuidance = nil
+    state.errorBanner = nil
+  }
+
+  private func finishGuidanceFailure(
+    _ error: GatewayError, kind: GuidanceKind, into state: inout State
+  ) {
+    let label = kind == .steer ? "Steering" : "Redirect"
+    if guidanceOutcomeIsUnknown(error) {
+      setCapability(.unknown, for: kind, into: &state)
+      state.errorBanner = "\(label) acknowledgement was not received. Your draft was kept."
+    } else {
+      // A real server/protocol response proves the method exists even though this request
+      // failed. Unsupported is represented as a typed success by the gateway client.
+      setCapability(.supported, for: kind, into: &state)
+      state.errorBanner = "\(label) failed: \(error.message) Your draft was kept."
+    }
+    state.pendingGuidance = nil
+  }
+
+  private func guidanceOutcomeIsUnknown(_ error: GatewayError) -> Bool {
+    if error.isDisconnected || error.isTimedOut || error.isSessionNotFound { return true }
+    switch error {
+    case .notConnected, .ticketUnavailable:
+      return true
+    default:
+      return false
+    }
+  }
+
+  private func setCapability(
+    _ capability: GuidanceCapability, for kind: GuidanceKind, into state: inout State
+  ) {
+    switch kind {
+    case .steer: state.steeringCapability = capability
+    case .redirect: state.redirectCapability = capability
+    }
+  }
+
+  /// Abandon an indeterminate request without touching the composer. Used when transport
+  /// ownership changes (disconnect, socket teardown, or a replacement live session id).
+  private func abandonPendingGuidance(into state: inout State) {
+    guard let pending = state.pendingGuidance else { return }
+    setCapability(.unknown, for: pending.kind, into: &state)
+    state.pendingGuidance = nil
+  }
+
+  private func abandonPendingGuidance(
+    ifSessionChangesTo sessionID: String, into state: inout State
+  ) {
+    guard state.pendingGuidance?.sessionID != sessionID else { return }
+    abandonPendingGuidance(into: &state)
+  }
+
+  // MARK: - Queue enqueue (#66)
+
+  private func enqueueComposer(into state: inout State) -> Effect<Action> {
+    guard state.canQueue else { return .none }
+    let queuedText = state.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if SlashSuggestionFilter.isCommandShaped(queuedText), state.commandCatalog != nil,
+       parseSlashCommand(queuedText).name.isEmpty {
+      state.errorBanner = "Command failed: empty command"
+      return .none
+    }
+    state.queuedPrompts.append(
+      QueuedPrompt(id: uuid(), text: queuedText, attachments: state.attachments)
+    )
+    state.composerText = ""
+    state.attachments = []
+    return .none
+  }
 
   // MARK: - Draft submission (shared by composer submit and queue drain, #66)
 

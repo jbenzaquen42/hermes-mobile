@@ -17,6 +17,11 @@ struct SettingsView: View {
         LabeledContent("URL", value: store.serverURLString)
       }
 
+      RunningTurnSettingsSection(
+        behavior: $store.midTurnBehavior,
+        queueingEnabled: $store.queueingEnabled
+      )
+
       Section {
         SecureField("Session token", text: $store.token)
           .textContentType(.password)

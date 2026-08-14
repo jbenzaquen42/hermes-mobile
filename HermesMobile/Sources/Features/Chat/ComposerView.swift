@@ -1,6 +1,57 @@
 import HermesKit
 import SwiftUI
 
+/// An explicit action for text entered while an assistant response is still running.
+/// Kept presentation-focused so `ComposerView` can expose the complete running-turn UX
+/// while the reducer remains the authority for availability, preference, and submission.
+enum RunningTurnAction: CaseIterable, Hashable, Identifiable {
+  case steer
+  case redirect
+  case sendAfterCompletion
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .steer: "Steer"
+    case .redirect: "Redirect active response"
+    case .sendAfterCompletion: "Send after completion"
+    }
+  }
+
+  var compactTitle: String {
+    switch self {
+    case .steer: "Steer"
+    case .redirect: "Redirect"
+    case .sendAfterCompletion: "Later"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .steer: "arrow.turn.up.right"
+    case .redirect: "arrow.right.circle"
+    case .sendAfterCompletion: "clock"
+    }
+  }
+}
+
+/// Reducer-facing configuration for the composer's running-turn controls. A `nil` value
+/// preserves the legacy Stop/queue affordance until the steering reducer is integrated.
+/// Availability is supplied per action because old agents may support neither steering
+/// RPC, while client-side send-after-completion can still be offered independently.
+struct RunningTurnActionConfiguration {
+  /// `nil` represents "Ask every time" and turns the emphasized control into a choice menu.
+  var primaryAction: RunningTurnAction? = .steer
+  var availableActions: Set<RunningTurnAction> = Set(RunningTurnAction.allCases)
+  var canSubmitDraft = true
+  var onSelect: (RunningTurnAction) -> Void
+
+  func isEnabled(_ action: RunningTurnAction) -> Bool {
+    canSubmitDraft && availableActions.contains(action)
+  }
+}
+
 /// The message composer: a growing text field above a toolbar row with a model/reasoning
 /// chip (tappable → picker), a voice button, and a send/interrupt button in the Hermes
 /// brand colour. While recording (#7) the field is replaced by a live waveform, elapsed
@@ -15,6 +66,10 @@ struct ComposerView: View {
   /// arrow back (and a blocking card, which suppresses queuing, brings Stop back).
   /// Defaulted so the snapshot call sites stay unchanged.
   var canQueue: Bool = false
+  /// New running-turn controls. Once supplied, a running turn gets a primary action,
+  /// explicit alternatives, and a separate Stop button. Optional during reducer rollout so
+  /// older call sites retain their existing Stop/queue behavior without fake callbacks.
+  var runningTurnActions: RunningTurnActionConfiguration? = nil
   let model: String?
   let reasoningEffort: String?
   /// Context-window usage (#4): a compact gauge beside the model chip. Hidden when nil or
@@ -89,9 +144,20 @@ struct ComposerView: View {
         Spacer()
         if attachmentsSupported { attachButton }
         voiceButton
-        sendButton
+        if !showsRunningTurnControls { sendButton }
+      }
+
+      if let runningTurnActions, isSending {
+        RunningTurnControls(
+          configuration: runningTurnActions,
+          onInterrupt: onInterrupt
+        )
       }
     }
+  }
+
+  private var showsRunningTurnControls: Bool {
+    isSending && runningTurnActions != nil
   }
 
   private var attachmentChips: some View {
@@ -210,6 +276,82 @@ struct ComposerView: View {
   private var modelLabel: String {
     if let model, !model.isEmpty { return model }
     return "Model"
+  }
+}
+
+/// The second composer row shown only during an active turn. Keeping the labeled controls
+/// off the model/attachment row avoids horizontal compression on smaller iPhones and makes
+/// the destructive Stop action visually independent from guidance submission.
+struct RunningTurnControls: View {
+  let configuration: RunningTurnActionConfiguration
+  let onInterrupt: () -> Void
+
+  var body: some View {
+    HStack(spacing: 10) {
+      if configuration.primaryAction != nil { alternativesMenu }
+      Spacer(minLength: 8)
+      stopButton
+      primaryControl
+    }
+    .font(.subheadline.weight(.semibold))
+  }
+
+  private var alternativesMenu: some View {
+    Menu {
+      ForEach(RunningTurnAction.allCases) { action in
+        Button {
+          configuration.onSelect(action)
+        } label: {
+          Label(action.title, systemImage: action.systemImage)
+        }
+        .disabled(!configuration.isEnabled(action))
+      }
+    } label: {
+      Label("Options", systemImage: "ellipsis.circle")
+    }
+    .buttonStyle(.bordered)
+    .tint(.secondary)
+    .accessibilityLabel("Running-turn options")
+  }
+
+  private var stopButton: some View {
+    Button(role: .destructive, action: onInterrupt) {
+      Label("Stop", systemImage: "stop.fill")
+    }
+    .buttonStyle(.bordered)
+    .tint(.red)
+    .accessibilityHint("Stops the active response and preserves the current draft")
+  }
+
+  @ViewBuilder
+  private var primaryControl: some View {
+    if let action = configuration.primaryAction {
+      Button {
+        configuration.onSelect(action)
+      } label: {
+        Label(action.compactTitle, systemImage: action.systemImage)
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(Color.hermesAccent)
+      .disabled(!configuration.isEnabled(action))
+      .accessibilityLabel(action.title)
+    } else {
+      Menu {
+        ForEach(RunningTurnAction.allCases) { action in
+          Button {
+            configuration.onSelect(action)
+          } label: {
+            Label(action.title, systemImage: action.systemImage)
+          }
+          .disabled(!configuration.isEnabled(action))
+        }
+      } label: {
+        Label("Choose", systemImage: "questionmark.circle")
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(Color.hermesAccent)
+      .accessibilityLabel("Choose running-turn action")
+    }
   }
 }
 

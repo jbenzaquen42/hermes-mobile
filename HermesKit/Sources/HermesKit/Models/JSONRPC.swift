@@ -140,6 +140,10 @@ public enum InboundFrame: Equatable, Sendable {
   case response(id: Int, result: JSONValue)
   /// An error response: `{id, error:{message}}`.
   case failure(id: Int?, message: String)
+  /// An error response that includes a JSON-RPC/application code. Keeping the code lets
+  /// typed clients distinguish unsupported operations (`-32601` / `4010`) from transport,
+  /// validation, and server failures without brittle message matching.
+  case codedFailure(id: Int?, code: Int, message: String)
   /// A well-formed frame we don't act on (e.g. a non-`event` notification).
   case ignored
 
@@ -157,7 +161,11 @@ public enum InboundFrame: Equatable, Sendable {
       if let result = frame["result"] {
         self = .response(id: id, result: result)
       } else if let message = frame["error"]?["message"]?.stringValue {
-        self = .failure(id: id, message: message)
+        if let code = frame["error"]?["code"]?.intValue {
+          self = .codedFailure(id: id, code: code, message: message)
+        } else {
+          self = .failure(id: id, message: message)
+        }
       } else if frame["error"] != nil {
         self = .failure(id: id, message: "Unknown error")
       } else {
