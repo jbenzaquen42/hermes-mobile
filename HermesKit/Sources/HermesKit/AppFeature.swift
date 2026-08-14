@@ -351,7 +351,10 @@ public struct AppFeature {
         }
         state.selectedDestination = destination
         if destination == .settings {
-          state.settings = makeSettingsState(chats: chats)
+          state.settings = makeSettingsState(
+            chats: chats,
+            activeWorkflowProfileName: Self.activeWorkflowProfileName(state.liveChat)
+          )
         }
 
         guard wasShowingChat else { return .none }
@@ -674,6 +677,9 @@ public struct AppFeature {
         if state.liveChat?.profileName == oldName {
           state.liveChat?.profileName = newName
         }
+        if state.settings?.activeWorkflowProfileName == oldName {
+          state.settings?.activeWorkflowProfileName = newName
+        }
         return .none
 
       case let .settings(.delegate(.profileDeleted(name))):
@@ -934,6 +940,12 @@ public struct AppFeature {
         let glow: Effect<Action> = state.home != nil
           ? .send(.home(.setSessionRunning(id: sessionID, running: running)))
           : .none
+        let activeProfile = running ? Self.activeWorkflowProfileName(state.liveChat) : nil
+        state.settings?.activeWorkflowProfileName = activeProfile
+        if state.settings?.capabilityManagement != nil {
+          state.settings?.capabilityManagement?.hasActiveWorkflow =
+            state.settings?.capabilityManagement?.profileName == activeProfile
+        }
         // A DETACHED slot (no marker in the path — the user popped to the list) only
         // outlives the pop while its turn runs. The turn ending — `message.complete`,
         // `.error`, or a foreground hydrate confirming `running == false` — means there's
@@ -1045,13 +1057,24 @@ public struct AppFeature {
   /// Build the root Settings destination from the latest Chats capability state and persisted
   /// running-turn preferences. It is recreated on every selection so capabilities discovered
   /// since login (notably push-plugin support) never paint stale controls.
-  private func makeSettingsState(chats: SessionListFeature.State) -> SettingsFeature.State {
+  private func makeSettingsState(
+    chats: SessionListFeature.State,
+    activeWorkflowProfileName: String?
+  ) -> SettingsFeature.State {
     SettingsFeature.State(
       connection: chats.connection,
       pushAvailable: chats.pushAvailable,
       midTurnBehavior: preferences.loadMidTurnBehavior(),
-      queueingEnabled: preferences.loadQueueingEnabled()
+      queueingEnabled: preferences.loadQueueingEnabled(),
+      activeWorkflowProfileName: activeWorkflowProfileName
     )
+  }
+
+  /// The gateway scopes the default profile by omitting the profile name. Settings uses an
+  /// explicit string key, so normalize the live chat before comparing it with a profile row.
+  private static func activeWorkflowProfileName(_ chat: ChatFeature.State?) -> String? {
+    guard let chat, chat.isRunning else { return nil }
+    return chat.profileName ?? SessionListFeature.State.defaultProfileName
   }
 
   /// Deterministic, non-sensitive Home summaries for approval ids learned from push routing.

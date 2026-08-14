@@ -44,10 +44,14 @@ public struct SettingsFeature {
     /// selector probe so a transient RPC failure cannot remove the session list.
     public var profiles: IdentifiedArrayOf<ProfileAdminSummary>
     public var profileLoadState: ProfileLoadState
+    /// Profile with a live running turn, normalized to `"default"` for an unscoped chat.
+    /// Capability management uses this only for the conservative toolset-disable warning.
+    public var activeWorkflowProfileName: String?
     /// A newly-created profile opens after the authoritative list refresh returns its row.
     var pendingCreatedProfileName: String?
     @Presents public var profileEditor: ProfileEditorFeature.State?
     @Presents public var addProfile: AddProfileFeature.State?
+    @Presents public var capabilityManagement: CapabilityManagementFeature.State?
 
     /// The outcome of a "send test notification" attempt, surfaced in the view/snapshots.
     public enum TestPushStatus: Equatable, Sendable {
@@ -89,8 +93,10 @@ public struct SettingsFeature {
       queueingEnabled: Bool = false,
       profiles: IdentifiedArrayOf<ProfileAdminSummary> = [],
       profileLoadState: ProfileLoadState = .idle,
+      activeWorkflowProfileName: String? = nil,
       profileEditor: ProfileEditorFeature.State? = nil,
-      addProfile: AddProfileFeature.State? = nil
+      addProfile: AddProfileFeature.State? = nil,
+      capabilityManagement: CapabilityManagementFeature.State? = nil
     ) {
       self.connection = connection
       self.token = connection.token ?? ""
@@ -106,9 +112,11 @@ public struct SettingsFeature {
       self.queueingEnabled = queueingEnabled
       self.profiles = profiles
       self.profileLoadState = profileLoadState
+      self.activeWorkflowProfileName = activeWorkflowProfileName
       pendingCreatedProfileName = nil
       self.profileEditor = profileEditor
       self.addProfile = addProfile
+      self.capabilityManagement = capabilityManagement
     }
 
     /// The installed plugin is behind `PushSetup.minimumPluginVersion` AND the agent can pull
@@ -168,9 +176,11 @@ public struct SettingsFeature {
     case loadProfiles
     case profileListResponse(ProfileListResponse)
     case profileTapped(ProfileAdminSummary)
+    case manageCapabilitiesTapped(ProfileAdminSummary)
     case addProfileTapped
     case addProfile(PresentationAction<AddProfileFeature.Action>)
     case profileEditor(PresentationAction<ProfileEditorFeature.Action>)
+    case capabilityManagement(PresentationAction<CapabilityManagementFeature.Action>)
     case delegate(Delegate)
 
     public enum ProfileListResponse: Equatable, Sendable {
@@ -294,6 +304,15 @@ public struct SettingsFeature {
         )
         return .none
 
+      case let .manageCapabilitiesTapped(summary):
+        guard state.profiles[id: summary.id] != nil else { return .none }
+        state.capabilityManagement = CapabilityManagementFeature.State(
+          connection: state.connection,
+          profileName: summary.name,
+          hasActiveWorkflow: state.activeWorkflowProfileName == summary.name
+        )
+        return .none
+
       case .addProfileTapped:
         if case .unsupported = state.profileLoadState { return .none }
         state.addProfile = AddProfileFeature.State(connection: state.connection)
@@ -328,6 +347,18 @@ public struct SettingsFeature {
         )
 
       case .profileEditor:
+        return .none
+
+      case .capabilityManagement(.presented(.delegate(.closed))):
+        state.capabilityManagement = nil
+        return .none
+
+      case .capabilityManagement(.presented(.delegate(.capabilitiesChanged))):
+        // Skills can change the profile summary's count. Refresh through the same native list
+        // path used after ProfileEditor saves/renames so Chats receives the authoritative row.
+        return .send(.loadProfiles)
+
+      case .capabilityManagement:
         return .none
 
       case let .pushPluginInfoLoaded(info):
@@ -510,6 +541,9 @@ public struct SettingsFeature {
     }
     .ifLet(\.$profileEditor, action: \.profileEditor) {
       ProfileEditorFeature()
+    }
+    .ifLet(\.$capabilityManagement, action: \.capabilityManagement) {
+      CapabilityManagementFeature()
     }
   }
 }
