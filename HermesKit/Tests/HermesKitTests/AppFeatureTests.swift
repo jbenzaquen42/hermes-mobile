@@ -1204,6 +1204,7 @@ struct AppFeatureTests {
       $0.path = .init()
       $0.liveChat = nil
       $0.pendingApprovalSessionIDs = []
+      $0.selectedDestination = .home
       $0.home = SessionListFeature.State(connection: fresh)
     }
     #expect(pinsCleared.value)
@@ -3183,5 +3184,202 @@ struct AppFeatureTests {
   @Test func foregroundWithoutRetryScreenEmitsNoRetry() async {
     let store = TestStore(initialState: AppFeature.State()) { AppFeature() }
     await store.send(.scenePhaseChanged(.active))
+  }
+
+  // MARK: Phase 2 application shell
+
+  @Test func connectedShellStartsOnHomeAndCapabilityGatesDeferredModules() {
+    let state = AppFeature.State(home: SessionListFeature.State(connection: connection))
+
+    #expect(AppDestination.allCases == [.home, .chats, .board, .automations, .settings])
+    #expect(state.selectedDestination == .home)
+    #expect(state.dashboard?.connection == connection)
+    #expect(state.home?.connection == connection)
+    #expect(state.settings == nil) // lazy: no hidden debug-log stream
+    #expect(state.availability(for: .home).isAvailable)
+    #expect(state.availability(for: .chats).isAvailable)
+    #expect(state.availability(for: .settings).isAvailable)
+    #expect(!state.availability(for: .board).isAvailable)
+    #expect(!state.availability(for: .automations).isAvailable)
+    #expect(state.boardAvailability.unavailableReason != nil)
+    #expect(state.automationsAvailability.unavailableReason != nil)
+  }
+
+  @Test func selectingSettingsCreatesAndThenReleasesItsChild() async {
+    let preferences = PreferencesClient.inMemory()
+    preferences.saveMidTurnBehavior(.redirect)
+    preferences.saveQueueingEnabled(true)
+    let store = TestStore(
+      initialState: AppFeature.State(home: SessionListFeature.State(connection: connection))
+    ) {
+      AppFeature()
+    } withDependencies: {
+      $0.preferences = preferences
+    }
+
+    await store.send(.destinationSelected(.settings)) {
+      $0.selectedDestination = .settings
+      $0.settings = SettingsFeature.State(
+        connection: self.connection,
+        midTurnBehavior: .redirect,
+        queueingEnabled: true
+      )
+    }
+    await store.send(.destinationSelected(.home)) {
+      $0.selectedDestination = .home
+      $0.settings = nil
+    }
+  }
+
+  @Test func homeNewChatDelegateReusesChatsSlotNavigation() async {
+    let store = TestStore(
+      initialState: AppFeature.State(home: SessionListFeature.State(connection: connection))
+    ) {
+      AppFeature()
+    }
+
+    await store.send(.dashboard(.delegate(.newChat)))
+    await store.receive(\.home.delegate.createSession) {
+      $0.liveChat = ChatFeature.State(
+        connection: self.connection,
+        profileName: nil,
+        composerText: ""
+      )
+      $0.path.append(ChatScreen.State(sessionKey: nil))
+    }
+    #expect(store.state.selectedDestination == .chats)
+  }
+
+  @Test func homeOpenSessionDelegateReusesLoadedSessionAndChatNavigation() async {
+    let session = Session(id: "home-session", title: "From Home")
+    let chats = SessionListFeature.State(
+      connection: connection,
+      sessions: [session]
+    )
+    let store = TestStore(initialState: AppFeature.State(home: chats)) { AppFeature() }
+
+    await store.send(.dashboard(.delegate(.openSession(id: session.id))))
+    await store.receive(\.home.delegate.openSession) {
+      $0.liveChat = ChatFeature.State(
+        connection: self.connection,
+        resumeStoredID: session.id,
+        profileName: nil,
+        title: "From Home"
+      )
+      $0.path.append(ChatScreen.State(sessionKey: session.id))
+    }
+    #expect(store.state.selectedDestination == .chats)
+  }
+
+  @Test func homeApprovalInteractionReusesExistingRecoveryHintRoute() async {
+    let interaction = HomePendingInteraction(
+      id: "approval-1",
+      sessionID: "approval-session",
+      kind: .approval,
+      title: "Approval needed"
+    )
+    let push = PushClient.inMemory()
+    let store = TestStore(
+      initialState: AppFeature.State(home: SessionListFeature.State(connection: connection))
+    ) {
+      AppFeature()
+    } withDependencies: {
+      $0.push = push.client
+    }
+
+    await store.send(.dashboard(.delegate(.openPendingInteraction(interaction)))) {
+      $0.pendingApprovalSessionIDs = [interaction.sessionID]
+    }
+    await store.receive(\.home.delegate.openSession) {
+      $0.pendingApprovalSessionIDs = []
+      var chat = ChatFeature.State(
+        connection: self.connection,
+        resumeStoredID: interaction.sessionID,
+        profileName: nil
+      )
+      chat.expectsPendingApproval = true
+      $0.liveChat = chat
+      $0.path.append(ChatScreen.State(sessionKey: interaction.sessionID))
+    }
+    await store.finish()
+    #expect(push.badgeCount == 0)
+  }
+
+  @Test func verifiedHomeModuleDelegatesOnlyOpenIsolatedPlaceholders() async {
+    let refreshedAt = Date(timeIntervalSince1970: 1)
+    var cards = HomeCards()
+    cards.kanbanStatus.succeed(with: HomeKanbanStatus(), at: refreshedAt)
+    cards.cronAttention.succeed(with: HomeCronAttention(jobs: []), at: refreshedAt)
+    let store = TestStore(
+      initialState: AppFeature.State(
+        dashboard: HomeFeature.State(connection: connection, cards: cards),
+        home: SessionListFeature.State(connection: connection)
+      )
+    ) {
+      AppFeature()
+    }
+
+    await store.send(.dashboard(.delegate(.createKanbanTask))) {
+      $0.boardAvailability = .available
+    }
+    await store.receive(\.destinationSelected) {
+      $0.selectedDestination = .board
+    }
+    #expect(store.state.liveChat == nil)
+
+    await store.send(.dashboard(.delegate(.createScheduledJob))) {
+      $0.automationsAvailability = .available
+    }
+    await store.receive(\.destinationSelected) {
+      $0.selectedDestination = .automations
+    }
+    #expect(store.state.liveChat == nil)
+  }
+
+  @Test func leavingChatsClearsOnlyTheMarkerUntilViewDisappearance() async {
+    var path = StackState<ChatScreen.State>()
+    path.append(ChatScreen.State(sessionKey: "s-live"))
+    let liveChat = ChatFeature.State(
+      connection: connection,
+      resumeStoredID: "s-live",
+      profileName: nil
+    )
+    let store = TestStore(
+      initialState: AppFeature.State(
+        home: SessionListFeature.State(connection: connection),
+        path: path,
+        liveChat: liveChat
+      )
+    ) {
+      AppFeature()
+    }
+
+    #expect(store.state.selectedDestination == .chats)
+    await store.send(.destinationSelected(.home)) {
+      $0.selectedDestination = .home
+      $0.path.removeAll()
+    }
+    // The outgoing ChatView still owns its pop/tab animation. Its later
+    // `.chatViewDisappeared` action applies the unchanged idle-vs-running teardown policy.
+    #expect(store.state.liveChat == liveChat)
+  }
+
+  @Test func rootSettingsTokenSaveKeepsHomeAndChatsAuthenticatedTogether() async {
+    var updatedConnection = connection
+    updatedConnection.token = "replacement"
+    let store = TestStore(
+      initialState: AppFeature.State(
+        selectedDestination: .settings,
+        home: SessionListFeature.State(connection: connection),
+        settings: SettingsFeature.State(connection: updatedConnection)
+      )
+    ) {
+      AppFeature()
+    }
+
+    await store.send(.settings(.delegate(.tokenSaved("replacement")))) {
+      $0.home?.connection.token = "replacement"
+      $0.dashboard?.connection.token = "replacement"
+    }
   }
 }

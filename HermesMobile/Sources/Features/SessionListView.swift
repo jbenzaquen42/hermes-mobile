@@ -8,6 +8,9 @@ import SwiftUI
 /// bottom search field).
 struct SessionListView: View {
   @Bindable var store: StoreOf<SessionListFeature>
+  /// The legacy standalone list opened Settings as a sheet. The application shell supplies a
+  /// dedicated Settings tab, so that duplicate toolbar entry is hidden there.
+  var showsSettingsButton = true
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
@@ -46,9 +49,11 @@ struct SessionListView: View {
     .searchable(text: $store.searchQuery, prompt: "Search sessions")
     .refreshable { store.send(.pulledToRefresh) }
     .toolbar {
-      ToolbarItem(placement: .topBarLeading) {
-        Button("Settings", systemImage: "gearshape") {
-          store.send(.settingsButtonTapped)
+      if showsSettingsButton {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Settings", systemImage: "gearshape") {
+            store.send(.settingsButtonTapped)
+          }
         }
       }
       if store.profilesSupported {
