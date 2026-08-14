@@ -346,13 +346,19 @@ private func decodeMCPServers(_ value: JSONValue) throws -> [MCPCatalogServer] {
     guard let row = catalogObject(value), let name = catalogNonEmptyString(row["name"]) else {
       return nil
     }
+    // `mcp.catalog` is the approved install catalog, not merely the configured-server list.
+    // Phase 4 manages servers that already exist; showing an uninstalled entry as a toggle
+    // would imply profiles.configure can install it (it cannot). Status-shaped payloads omit
+    // `installed`, so absence continues to mean this is an existing server.
+    let installed = catalogBool(row["installed"]) ?? true
+    guard installed else { return nil }
     let tools = decodeMCPTools(row["tools"])
     let reportedCount = catalogInt(row["tool_count"])
       ?? (catalogInt(row["tools"]) ?? (tools.isEmpty ? nil : tools.count))
     return MCPCatalogServer(
       name: name,
       description: catalogString(row["description"]) ?? "",
-      installed: catalogBool(row["installed"]) ?? true,
+      installed: installed,
       enabled: catalogBool(row["enabled"]) ?? !(catalogBool(row["disabled"]) ?? false),
       transport: safeCatalogTransport(row["transport"]),
       tools: tools,

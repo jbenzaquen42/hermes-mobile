@@ -97,9 +97,19 @@ import Testing
             ]),
             .object([
               "name": .string("unsafe-transport"),
+              "installed": .bool(true),
               "transport": .string("https://secret.internal/mcp"),
               "disabled": .bool(true),
               "tools": .number(12),
+            ]),
+            // The native mcp.catalog includes approved-but-uninstalled entries. They are not
+            // configured servers and must not become profile toggles.
+            .object([
+              "name": .string("not-installed"),
+              "installed": .bool(false),
+              "enabled": .bool(false),
+              "requires": .array([.string("PRIVATE_API_KEY")]),
+              "url": .string("https://catalog.example/mcp"),
             ]),
           ]),
         ])
@@ -149,6 +159,7 @@ import Testing
     #expect(catalog.mcpServers[1].transport.isEmpty)
     #expect(catalog.mcpServers[1].health == .disabled)
     #expect(catalog.mcpServers[1].reportedToolCount == 12)
+    #expect(catalog.mcpServers.count == 2)
 
     let diagnostic = String(reflecting: catalog)
     #expect(!diagnostic.contains("secret.internal"))
