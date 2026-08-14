@@ -39,7 +39,8 @@ final class ProfileAdministrationSnapshotTests: SnapshotTestCase {
         loadState: .loaded,
         onReload: {},
         onAdd: {},
-        onSelect: { _ in }
+        onSelect: { _ in },
+        onManageCapabilities: { _ in }
       )
     }
 
@@ -53,7 +54,8 @@ final class ProfileAdministrationSnapshotTests: SnapshotTestCase {
         loadState: .failed("The server disconnected while refreshing."),
         onReload: {},
         onAdd: {},
-        onSelect: { _ in }
+        onSelect: { _ in },
+        onManageCapabilities: { _ in }
       )
     }
 
