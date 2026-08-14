@@ -285,6 +285,7 @@ public struct AppFeature {
   @Dependency(\.hermesREST) var rest
   @Dependency(\.push) var push
   @Dependency(\.backgroundTask) var backgroundTask
+  @Dependency(\.profileDraft) var profileDraft
 
   public init() {}
 
@@ -410,6 +411,7 @@ public struct AppFeature {
         try? keychain.deleteSession()
         preferences.clearServerURL()
         preferences.clearIdentityScopedPrefs()
+        profileDraft.removeAll()
         preferences.saveGroupingMode(.default)
         preferences.clearChatInputPreferences()
         state.connectionFailed = nil
@@ -636,6 +638,52 @@ public struct AppFeature {
         state.liveChat?.queueingEnabled = queueingEnabled
         return .none
 
+      case let .settings(.delegate(.profilesChanged(summaries))):
+        guard state.home != nil else { return .none }
+        state.home?.profiles = IdentifiedArray(uniqueElements: summaries.map {
+          Profile(
+            name: $0.name,
+            isDefault: $0.isDefault,
+            model: $0.model,
+            provider: $0.provider,
+            skillCount: $0.skillCount
+          )
+        })
+        state.home?.profilesSupported = true
+        guard let selected = state.home?.selectedProfileName,
+              state.home?.profiles[id: selected] == nil else { return .none }
+        return .send(.home(.selectProfile(name: SessionListFeature.State.defaultProfileName)))
+
+      case .settings(.delegate(.profileCreated)):
+        // The following native profiles.list response carries the authoritative row and
+        // flows through `profilesChanged`; creating a profile does not change Chats' device-
+        // local selection by itself.
+        return .none
+
+      case let .settings(.delegate(.profileRenamed(oldName, newName))):
+        if let old = state.home?.profiles[id: oldName] {
+          var renamed = old
+          renamed.name = newName
+          state.home?.profiles[id: oldName] = nil
+          state.home?.profiles.append(renamed)
+        }
+        if state.home?.selectedProfileName == oldName {
+          state.home?.selectedProfileName = newName
+          preferences.saveSelectedProfileID(newName)
+        }
+        if state.liveChat?.profileName == oldName {
+          state.liveChat?.profileName = newName
+        }
+        return .none
+
+      case let .settings(.delegate(.profileDeleted(name))):
+        state.home?.profiles[id: name] = nil
+        let selectDefault: Effect<Action> = state.home?.selectedProfileName == name
+          ? .send(.home(.selectProfile(name: SessionListFeature.State.defaultProfileName)))
+          : .none
+        let clearDeletedChat = state.liveChat?.profileName == name ? teardownSlot() : .none
+        return .merge(selectDefault, clearDeletedChat)
+
       case .settings(.delegate(.installPushPlugin)):
         // Root Settings is not a sheet, but the intent is identical: leave Settings and open
         // a reviewable, pre-filled chat through the SessionList delegate path.
@@ -815,6 +863,7 @@ public struct AppFeature {
         // The approval badge set + tap stash are identity-scoped too — the old user's
         // pending approvals must not badge (or replay into) the new user's list.
         preferences.clearIdentityScopedPrefs()
+        profileDraft.removeAll()
         state.path = .init()
         state.liveChat = nil
         state.pendingPushTap = nil
@@ -831,6 +880,7 @@ public struct AppFeature {
         try? keychain.deleteSession()
         preferences.clearServerURL()
         preferences.clearIdentityScopedPrefs()
+        profileDraft.removeAll()
         preferences.saveGroupingMode(.default)
         preferences.clearChatInputPreferences()
         state.reauth = nil

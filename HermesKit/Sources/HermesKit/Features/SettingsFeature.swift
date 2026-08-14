@@ -40,6 +40,14 @@ public struct SettingsFeature {
     /// seeded by `SessionListFeature` when the sheet opens so controls paint correctly.
     public var midTurnBehavior: ChatFeature.MidTurnBehavior
     public var queueingEnabled: Bool
+    /// Native profile-administration list. This is independent from Chats' legacy REST
+    /// selector probe so a transient RPC failure cannot remove the session list.
+    public var profiles: IdentifiedArrayOf<ProfileAdminSummary>
+    public var profileLoadState: ProfileLoadState
+    /// A newly-created profile opens after the authoritative list refresh returns its row.
+    var pendingCreatedProfileName: String?
+    @Presents public var profileEditor: ProfileEditorFeature.State?
+    @Presents public var addProfile: AddProfileFeature.State?
 
     /// The outcome of a "send test notification" attempt, surfaced in the view/snapshots.
     public enum TestPushStatus: Equatable, Sendable {
@@ -61,6 +69,14 @@ public struct SettingsFeature {
       case failed(String)
     }
 
+    public enum ProfileLoadState: Equatable, Sendable {
+      case idle
+      case loading
+      case loaded
+      case failed(String)
+      case unsupported(String)
+    }
+
     public init(
       connection: ServerConnection,
       pushAvailable: Bool = true,
@@ -70,7 +86,11 @@ public struct SettingsFeature {
       pushPlugin: PushPluginInfo? = nil,
       pluginUpdate: PluginUpdateStatus = .idle,
       midTurnBehavior: ChatFeature.MidTurnBehavior = .steer,
-      queueingEnabled: Bool = false
+      queueingEnabled: Bool = false,
+      profiles: IdentifiedArrayOf<ProfileAdminSummary> = [],
+      profileLoadState: ProfileLoadState = .idle,
+      profileEditor: ProfileEditorFeature.State? = nil,
+      addProfile: AddProfileFeature.State? = nil
     ) {
       self.connection = connection
       self.token = connection.token ?? ""
@@ -84,6 +104,11 @@ public struct SettingsFeature {
       self.pluginUpdate = pluginUpdate
       self.midTurnBehavior = midTurnBehavior
       self.queueingEnabled = queueingEnabled
+      self.profiles = profiles
+      self.profileLoadState = profileLoadState
+      pendingCreatedProfileName = nil
+      self.profileEditor = profileEditor
+      self.addProfile = addProfile
     }
 
     /// The installed plugin is behind `PushSetup.minimumPluginVersion` AND the agent can pull
@@ -140,7 +165,19 @@ public struct SettingsFeature {
     case updatePluginTapped
     /// Outcome of that pull.
     case pluginUpdateResult(PluginUpdateOutcome)
+    case loadProfiles
+    case profileListResponse(ProfileListResponse)
+    case profileTapped(ProfileAdminSummary)
+    case addProfileTapped
+    case addProfile(PresentationAction<AddProfileFeature.Action>)
+    case profileEditor(PresentationAction<ProfileEditorFeature.Action>)
     case delegate(Delegate)
+
+    public enum ProfileListResponse: Equatable, Sendable {
+      case loaded([ProfileAdminSummary])
+      case unsupported(String)
+      case failed(String)
+    }
 
     /// Result of the in-app plugin update, flattened to an `Equatable` shape (the failure
     /// carries the server's message rather than the error value, matching `testPushResult`).
@@ -164,6 +201,11 @@ public struct SettingsFeature {
       /// The push guide's "Ask agent to install" — dismiss Settings and open a new chat with
       /// the install prompt pre-filled (handled up the chain by `AppFeature`).
       case installPushPlugin
+      /// Keep Chats' selected-profile state synchronized after Settings mutations.
+      case profilesChanged([ProfileAdminSummary])
+      case profileCreated(name: String)
+      case profileRenamed(oldName: String, newName: String)
+      case profileDeleted(name: String)
     }
   }
 
@@ -177,6 +219,8 @@ public struct SettingsFeature {
   @Dependency(\.push) var push
   @Dependency(\.continuousClock) var clock
   @Dependency(\.dismiss) var dismiss
+  @Dependency(\.hermesProfileAdmin) var profileAdmin
+  @Dependency(\.profileDraft) var profileDraft
 
   public init() {}
 
@@ -200,8 +244,91 @@ public struct SettingsFeature {
           // an unreachable/old agent maps to `.unknown`, which offers nothing.
           .run { [rest, connection = state.connection] send in
             await send(.pushPluginInfoLoaded(rest.pushPluginInfo(connection)))
-          }
+          },
+          .send(.loadProfiles)
         )
+
+      case .loadProfiles:
+        guard state.profileLoadState != .loading else { return .none }
+        state.profileLoadState = .loading
+        return .run { [profileAdmin, connection = state.connection] send in
+          do {
+            await send(.profileListResponse(.loaded(
+              try await profileAdmin.list(connection, false)
+            )))
+          } catch let error as ProfileAdminError {
+            if error == .unsupported {
+              await send(.profileListResponse(.unsupported(error.message)))
+            } else {
+              await send(.profileListResponse(.failed(error.message)))
+            }
+          } catch {
+            await send(.profileListResponse(.failed("Couldn’t load profiles.")))
+          }
+        }
+
+      case let .profileListResponse(.loaded(profiles)):
+        state.profiles = IdentifiedArray(uniqueElements: profiles)
+        state.profileLoadState = .loaded
+        if let pending = state.pendingCreatedProfileName,
+           let summary = state.profiles[id: pending] {
+          state.pendingCreatedProfileName = nil
+          state.profileEditor = ProfileEditorFeature.State(
+            connection: state.connection, summary: summary
+          )
+        }
+        return .send(.delegate(.profilesChanged(profiles)))
+
+      case let .profileListResponse(.unsupported(message)):
+        state.profileLoadState = .unsupported(message)
+        return .none
+
+      case let .profileListResponse(.failed(message)):
+        state.profileLoadState = .failed(message)
+        return .none
+
+      case let .profileTapped(summary):
+        guard state.profiles[id: summary.id] != nil else { return .none }
+        state.profileEditor = ProfileEditorFeature.State(
+          connection: state.connection, summary: summary
+        )
+        return .none
+
+      case .addProfileTapped:
+        if case .unsupported = state.profileLoadState { return .none }
+        state.addProfile = AddProfileFeature.State(connection: state.connection)
+        return .none
+
+      case let .addProfile(.presented(.delegate(.created(name)))):
+        state.addProfile = nil
+        state.pendingCreatedProfileName = name
+        return .merge(
+          .send(.delegate(.profileCreated(name: name))),
+          .send(.loadProfiles)
+        )
+
+      case .addProfile:
+        return .none
+
+      case .profileEditor(.presented(.delegate(.closed))):
+        state.profileEditor = nil
+        return .send(.loadProfiles)
+
+      case let .profileEditor(.presented(.delegate(.renamed(oldName, newName)))):
+        return .merge(
+          .send(.delegate(.profileRenamed(oldName: oldName, newName: newName))),
+          .send(.loadProfiles)
+        )
+
+      case let .profileEditor(.presented(.delegate(.deleted(name)))):
+        state.profileEditor = nil
+        return .merge(
+          .send(.delegate(.profileDeleted(name: name))),
+          .send(.loadProfiles)
+        )
+
+      case .profileEditor:
+        return .none
 
       case let .pushPluginInfoLoaded(info):
         state.pushPlugin = info
@@ -358,6 +485,7 @@ public struct SettingsFeature {
         preferences.saveGroupingMode(.default) // reset the list grouping pref on logout
         preferences.clearSelectedProfileID() // selected profile is per-server — clear on logout
         preferences.clearChatInputPreferences()
+        profileDraft.removeAll()
         chatSnapshot.wipeAll() // snapshots + turn anchors are per-server — wipe on logout
         return .merge(
           .send(.delegate(.disconnect)),
@@ -376,6 +504,12 @@ public struct SettingsFeature {
       case .delegate:
         return .none
       }
+    }
+    .ifLet(\.$addProfile, action: \.addProfile) {
+      AddProfileFeature()
+    }
+    .ifLet(\.$profileEditor, action: \.profileEditor) {
+      ProfileEditorFeature()
     }
   }
 }

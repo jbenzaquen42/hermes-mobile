@@ -1154,6 +1154,39 @@ public struct SessionListFeature {
         // Manual reconnect = re-fetch the list over REST.
         return .send(.pulledToRefresh)
 
+      case let .settings(.presented(.delegate(.profilesChanged(summaries)))):
+        state.profilesSupported = true
+        state.profiles = IdentifiedArray(uniqueElements: summaries.map {
+          Profile(
+            name: $0.name,
+            isDefault: $0.isDefault,
+            model: $0.model,
+            provider: $0.provider,
+            skillCount: $0.skillCount
+          )
+        })
+        guard state.profiles[id: state.selectedProfileName] == nil else { return .none }
+        return .send(.selectProfile(name: Self.State.defaultProfileName))
+
+      case .settings(.presented(.delegate(.profileCreated))):
+        return .none
+
+      case let .settings(.presented(.delegate(.profileRenamed(oldName, newName)))):
+        if let profile = state.profiles[id: oldName] {
+          var renamed = profile
+          renamed.name = newName
+          state.profiles[id: oldName] = nil
+          state.profiles.append(renamed)
+        }
+        if state.selectedProfileName == oldName {
+          state.selectedProfileName = newName
+          preferences.saveSelectedProfileID(newName)
+        }
+        return .none
+
+      case let .settings(.presented(.delegate(.profileDeleted(name)))):
+        return .send(.deleteProfileSucceeded(name: name))
+
       case .settings(.presented(.delegate(.installPushPlugin))):
         // The Settings push guide's "Ask agent" → dismiss Settings (Settings already requested
         // its own dismissal) and open a new chat with the install prompt pre-filled.

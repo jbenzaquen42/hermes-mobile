@@ -40,9 +40,8 @@ struct AddProfileFeatureTests {
     #expect(state.canCreate == false)
   }
 
-  @Test func createSuccessWithBlankSoulSkipsUpdateSoul() async {
-    let createdName = LockIsolated<String?>(nil)
-    let soulCalled = LockIsolated(false)
+  @Test func createSuccessWithBlankSoulOmitsSoulFromRequest() async {
+    let request = LockIsolated<ProfileCreateRequest?>(nil)
     var state = AddProfileFeature.State(connection: connection)
     state.name = "work"
     state.soul = "   " // blank after trimming
@@ -50,8 +49,10 @@ struct AddProfileFeatureTests {
     let store = TestStore(initialState: state) {
       AddProfileFeature()
     } withDependencies: {
-      $0.hermesProfiles.create = { @Sendable _, name, _ in createdName.setValue(name) }
-      $0.hermesProfiles.updateSoul = { @Sendable _, _, _ in soulCalled.setValue(true) }
+      $0.hermesProfileAdmin.create = { @Sendable _, value in
+        request.setValue(value)
+        return ProfileCreateResult(ok: true, name: value.name)
+      }
     }
 
     await store.send(.createTapped) {
@@ -59,15 +60,17 @@ struct AddProfileFeatureTests {
     }
     await store.receive(\.createResponse.success) {
       $0.isCreating = false
+      $0.createSupported = true
     }
     await store.receive(\.delegate.created)
 
-    #expect(createdName.value == "work")
-    #expect(soulCalled.value == false) // blank soul → no updateSoul call
+    #expect(request.value?.name == "work")
+    #expect(request.value?.soul == nil)
+    #expect(request.value?.cloneFrom == "default")
   }
 
-  @Test func createSuccessWithSoulCallsUpdateSoul() async {
-    let soul = LockIsolated<(String, String)?>(nil)
+  @Test func createSuccessIncludesSoulInRequest() async {
+    let request = LockIsolated<ProfileCreateRequest?>(nil)
     var state = AddProfileFeature.State(connection: connection)
     state.name = "work"
     state.soul = "You are helpful."
@@ -75,8 +78,10 @@ struct AddProfileFeatureTests {
     let store = TestStore(initialState: state) {
       AddProfileFeature()
     } withDependencies: {
-      $0.hermesProfiles.create = { @Sendable _, _, _ in }
-      $0.hermesProfiles.updateSoul = { @Sendable _, name, content in soul.setValue((name, content)) }
+      $0.hermesProfileAdmin.create = { @Sendable _, value in
+        request.setValue(value)
+        return ProfileCreateResult(ok: true, name: value.name)
+      }
     }
 
     await store.send(.createTapped) {
@@ -84,21 +89,24 @@ struct AddProfileFeatureTests {
     }
     await store.receive(\.createResponse.success) {
       $0.isCreating = false
+      $0.createSupported = true
     }
     await store.receive(\.delegate.created)
 
-    #expect(soul.value?.0 == "work")
-    #expect(soul.value?.1 == "You are helpful.")
+    #expect(request.value?.name == "work")
+    #expect(request.value?.soul == "You are helpful.")
   }
 
-  @Test func createServer400SetsErrorBannerAndClearsCreating() async {
+  @Test func createFailureSetsErrorBannerAndClearsCreating() async {
     var state = AddProfileFeature.State(connection: connection)
     state.name = "test"
 
     let store = TestStore(initialState: state) {
       AddProfileFeature()
     } withDependencies: {
-      $0.hermesProfiles.create = { @Sendable _, _, _ in throw RESTError.server(status: 400) }
+      $0.hermesProfileAdmin.create = { @Sendable _, _ in
+        throw ProfileAdminError.request("Profile already exists")
+      }
     }
 
     await store.send(.createTapped) {
@@ -106,7 +114,22 @@ struct AddProfileFeatureTests {
     }
     await store.receive(\.createResponse.failure) {
       $0.isCreating = false
-      $0.errorBanner = RESTError.server(status: 400).message
+      $0.errorBanner = "Profile already exists"
+    }
+  }
+
+  @Test func unsupportedCreateIsCapabilityGated() async {
+    var state = AddProfileFeature.State(connection: connection)
+    state.name = "work"
+    let store = TestStore(initialState: state) { AddProfileFeature() } withDependencies: {
+      $0.hermesProfileAdmin.create = { @Sendable _, _ in throw ProfileAdminError.unsupported }
+    }
+
+    await store.send(.createTapped) { $0.isCreating = true }
+    await store.receive(\.createResponse.failure) {
+      $0.isCreating = false
+      $0.createSupported = false
+      $0.errorBanner = ProfileAdminError.unsupported.message
     }
   }
 
