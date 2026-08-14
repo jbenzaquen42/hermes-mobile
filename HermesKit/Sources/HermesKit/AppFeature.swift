@@ -294,6 +294,7 @@ public struct AppFeature {
         preferences.clearServerURL()
         preferences.clearIdentityScopedPrefs()
         preferences.saveGroupingMode(.default)
+        preferences.clearChatInputPreferences()
         state.connectionFailed = nil
         state.path = .init()
         state.liveChat = nil
@@ -569,6 +570,11 @@ public struct AppFeature {
         state.pendingApprovalSessionIDs = []
         return .merge(setBadge(state), unregisterPushOnLogout(connection: connection))
 
+      case let .home(.delegate(.chatInputPreferencesChanged(behavior, queueingEnabled))):
+        state.liveChat?.midTurnBehavior = behavior
+        state.liveChat?.queueingEnabled = queueingEnabled
+        return .none
+
       case .liveChat(.delegate(.sessionExpired)):
         // The live (gated) session died — attached or detached, the slot is the one chat.
         // The chat already paused its own reconnect; raise the re-auth modal seeded from its
@@ -606,6 +612,7 @@ public struct AppFeature {
         preferences.clearServerURL()
         preferences.clearIdentityScopedPrefs()
         preferences.saveGroupingMode(.default)
+        preferences.clearChatInputPreferences()
         state.reauth = nil
         state.path = .init()
         state.liveChat = nil
@@ -796,7 +803,10 @@ public struct AppFeature {
   /// Fill the live-chat slot and (re)set the navigation path to that chat's single marker.
   /// One slot ↔ one marker: the path never holds more than one chat screen, so replacing the
   /// contents (rather than appending) can't stack duplicates.
-  private func fillLiveChat(_ chat: ChatFeature.State, into state: inout State) {
+  private func fillLiveChat(_ incomingChat: ChatFeature.State, into state: inout State) {
+    var chat = incomingChat
+    chat.midTurnBehavior = preferences.loadMidTurnBehavior()
+    chat.queueingEnabled = preferences.loadQueueingEnabled()
     state.liveChat = chat
     state.path.removeAll()
     state.path.append(ChatScreen.State(sessionKey: chat.sessionKey))

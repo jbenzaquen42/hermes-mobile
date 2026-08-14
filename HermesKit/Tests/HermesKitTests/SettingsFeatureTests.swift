@@ -16,6 +16,8 @@ struct SettingsFeatureTests {
     preferences.saveSeenCounts(["s1": 4])
     preferences.saveGroupingMode(.chronological)
     preferences.saveSelectedProfileID("staging")
+    preferences.saveMidTurnBehavior(.redirect)
+    preferences.saveQueueingEnabled(true)
     let store = TestStore(initialState: SettingsFeature.State(connection: connection)) {
       SettingsFeature()
     } withDependencies: {
@@ -33,6 +35,8 @@ struct SettingsFeatureTests {
     #expect(preferences.loadSeenCounts() == [:]) // unread state cleared too
     #expect(preferences.loadGroupingMode() == .workspace) // grouping pref reset on logout
     #expect(preferences.loadSelectedProfileID() == nil) // selected profile cleared on logout
+    #expect(preferences.loadMidTurnBehavior() == .steer)
+    #expect(preferences.loadQueueingEnabled() == false)
   }
 
   @Test func clearTokenWipesChatSnapshotStore() async {
@@ -101,6 +105,161 @@ struct SettingsFeatureTests {
     // token == connection.token → canSaveToken is false → no effect.
     #expect(!store.state.canSaveToken)
     await store.send(.saveTokenTapped)
+  }
+
+  // MARK: - Running-turn input preferences
+
+  @Test func chatInputPreferencesPersistWithSafeDefaults() {
+    let suiteName = "SettingsFeatureTests.chat-input.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    var preferences = PreferencesClient.live(defaults: defaults)
+    #expect(preferences.loadMidTurnBehavior() == .steer)
+    #expect(preferences.loadQueueingEnabled() == false)
+
+    preferences.saveMidTurnBehavior(.askEveryTime)
+    preferences.saveQueueingEnabled(true)
+
+    // Recreate the client to prove the values came from UserDefaults, not captured state.
+    preferences = PreferencesClient.live(defaults: defaults)
+    #expect(preferences.loadMidTurnBehavior() == .askEveryTime)
+    #expect(preferences.loadQueueingEnabled())
+
+    preferences.clearChatInputPreferences()
+    #expect(preferences.loadMidTurnBehavior() == .steer)
+    #expect(preferences.loadQueueingEnabled() == false)
+  }
+
+  @Test func malformedStoredMidTurnBehaviorFallsBackToSteer() {
+    let suiteName = "SettingsFeatureTests.chat-input-invalid.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    defaults.set("future-mode", forKey: "hermes.chat-mid-turn-behavior")
+
+    #expect(PreferencesClient.live(defaults: defaults).loadMidTurnBehavior() == .steer)
+  }
+
+  @Test func settingsBindingsPersistAndPublishTheCompletePolicy() async {
+    let preferences = PreferencesClient.inMemory()
+    let store = TestStore(initialState: SettingsFeature.State(connection: connection)) {
+      SettingsFeature()
+    } withDependencies: {
+      $0.preferences = preferences
+    }
+
+    await store.send(\.binding.midTurnBehavior, .redirect) {
+      $0.midTurnBehavior = .redirect
+    }
+    await store.receive(\.delegate.chatInputPreferencesChanged)
+    #expect(preferences.loadMidTurnBehavior() == .redirect)
+    #expect(preferences.loadQueueingEnabled() == false)
+
+    await store.send(\.binding.queueingEnabled, true) {
+      $0.queueingEnabled = true
+    }
+    await store.receive(\.delegate.chatInputPreferencesChanged)
+    #expect(preferences.loadMidTurnBehavior() == .redirect)
+    #expect(preferences.loadQueueingEnabled())
+  }
+
+  @Test func openingSettingsSeedsPersistedChatInputPreferences() async {
+    let preferences = PreferencesClient.inMemory()
+    preferences.saveMidTurnBehavior(.queue)
+    preferences.saveQueueingEnabled(true)
+    let store = TestStore(
+      initialState: SessionListFeature.State(connection: connection, pushAvailable: false)
+    ) {
+      SessionListFeature()
+    } withDependencies: {
+      $0.preferences = preferences
+    }
+
+    await store.send(.settingsButtonTapped) {
+      $0.settings = SettingsFeature.State(
+        connection: self.connection,
+        pushAvailable: false,
+        midTurnBehavior: .queue,
+        queueingEnabled: true
+      )
+    }
+  }
+
+  @Test func sessionListForwardsChatInputPreferenceChanges() async {
+    var initial = SessionListFeature.State(connection: connection)
+    initial.settings = SettingsFeature.State(connection: connection)
+    let store = TestStore(initialState: initial) { SessionListFeature() }
+
+    await store.send(
+      .settings(
+        .presented(
+          .delegate(.chatInputPreferencesChanged(.redirect, queueingEnabled: true))
+        )
+      )
+    )
+    await store.receive(\.delegate.chatInputPreferencesChanged)
+  }
+
+  @Test func newAndOpenedChatsReceivePersistedChatInputPreferences() async {
+    let preferences = PreferencesClient.inMemory()
+    preferences.saveMidTurnBehavior(.askEveryTime)
+    preferences.saveQueueingEnabled(true)
+
+    let newChatStore = TestStore(
+      initialState: AppFeature.State(home: SessionListFeature.State(connection: connection))
+    ) {
+      AppFeature()
+    } withDependencies: {
+      $0.preferences = preferences
+    }
+    var expectedNewChat = ChatFeature.State(connection: connection)
+    expectedNewChat.midTurnBehavior = .askEveryTime
+    expectedNewChat.queueingEnabled = true
+    await newChatStore.send(.home(.delegate(.createSession(initialComposerText: nil)))) {
+      $0.liveChat = expectedNewChat
+      $0.path.append(ChatScreen.State(sessionKey: nil))
+    }
+
+    let openedChatStore = TestStore(
+      initialState: AppFeature.State(home: SessionListFeature.State(connection: connection))
+    ) {
+      AppFeature()
+    } withDependencies: {
+      $0.preferences = preferences
+    }
+    let session = Session(id: "stored-session", title: "Persisted policy")
+    var expectedOpenedChat = ChatFeature.State(
+      connection: connection,
+      resumeStoredID: session.id,
+      title: session.title
+    )
+    expectedOpenedChat.midTurnBehavior = .askEveryTime
+    expectedOpenedChat.queueingEnabled = true
+    await openedChatStore.send(.home(.delegate(.openSession(session)))) {
+      $0.liveChat = expectedOpenedChat
+      $0.path.append(ChatScreen.State(sessionKey: session.id))
+    }
+  }
+
+  @Test func changedSettingsUpdateDetachedLiveChatImmediately() async {
+    let chat = ChatFeature.State(connection: connection, resumeStoredID: "stored-session")
+    let store = TestStore(
+      initialState: AppFeature.State(
+        home: SessionListFeature.State(connection: connection),
+        liveChat: chat
+      )
+    ) {
+      AppFeature()
+    }
+
+    await store.send(
+      .home(
+        .delegate(.chatInputPreferencesChanged(.redirect, queueingEnabled: true))
+      )
+    ) {
+      $0.liveChat?.midTurnBehavior = .redirect
+      $0.liveChat?.queueingEnabled = true
+    }
   }
 
   @Test func taskStreamsDebugLogEntries() async {
