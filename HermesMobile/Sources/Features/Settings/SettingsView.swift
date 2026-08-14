@@ -19,6 +19,23 @@ struct SettingsView: View {
         LabeledContent("URL", value: store.serverURLString)
       }
 
+      Section {
+        NavigationLink {
+          ProfileAdministrationView(store: store)
+        } label: {
+          LabeledContent {
+            profileStatus
+          } label: {
+            Label("Profiles", systemImage: "person.2")
+          }
+        }
+        .accessibilityHint("Opens profile administration")
+      } header: {
+        Text("Profiles")
+      } footer: {
+        Text("Configure each profile's model, reasoning, SOUL, skills, toolsets, and MCP servers.")
+      }
+
       RunningTurnSettingsSection(
         behavior: $store.midTurnBehavior,
         queueingEnabled: $store.queueingEnabled
@@ -187,5 +204,23 @@ struct SettingsView: View {
       return "Update to \(latest). \(reason)"
     }
     return "Installed \(installed), latest \(latest). \(reason)"
+  }
+
+  @ViewBuilder
+  private var profileStatus: some View {
+    switch store.profileLoadState {
+    case .idle, .loading:
+      ProgressView()
+        .controlSize(.small)
+        .accessibilityLabel("Loading profiles")
+    case .loaded:
+      Text(store.profiles.count.formatted())
+    case .failed:
+      Text("Needs attention")
+        .foregroundStyle(.orange)
+    case .unsupported:
+      Text("Unavailable")
+        .foregroundStyle(.secondary)
+    }
   }
 }

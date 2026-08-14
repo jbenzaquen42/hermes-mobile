@@ -17,9 +17,38 @@ final class SettingsSnapshotTests: SnapshotTestCase {
       SettingsView(
         store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
           $0.debugLog = .testValue // inert stream for a deterministic render
+          $0.hermesProfileAdmin.list = { _, _ in [] }
         }
       )
     }
+    assertSnapshot(of: view, as: deviceImage())
+  }
+
+  func testSettingsProfilesLoaded() {
+    let profiles = [
+      ProfileAdminSummary(name: "default", isDefault: true),
+      ProfileAdminSummary(
+        name: "ios-release",
+        model: "gpt-5.6-codex",
+        provider: "openai",
+        profileDescription: "Ships Hermes Control",
+        skillCount: 7
+      ),
+    ]
+    let initial = SettingsFeature.State(
+      connection: connection,
+      profiles: .init(uniqueElements: profiles),
+      profileLoadState: .loaded
+    )
+    let view = NavigationStack {
+      SettingsView(
+        store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
+          $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in profiles }
+        }
+      )
+    }
+
     assertSnapshot(of: view, as: deviceImage())
   }
 
@@ -34,6 +63,7 @@ final class SettingsSnapshotTests: SnapshotTestCase {
       SettingsView(
         store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
           $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in [] }
           $0.push = PushClient.inMemory(granted: true, status: .authorized).client
         }
       )
@@ -51,6 +81,7 @@ final class SettingsSnapshotTests: SnapshotTestCase {
       SettingsView(
         store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
           $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in [] }
           $0.push = PushClient.inMemory(granted: false, status: .notDetermined).client
         }
       )
@@ -70,6 +101,7 @@ final class SettingsSnapshotTests: SnapshotTestCase {
       SettingsView(
         store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
           $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in [] }
           $0.push = PushClient.inMemory(granted: true, status: .authorized).client
         }
       )
@@ -89,6 +121,7 @@ final class SettingsSnapshotTests: SnapshotTestCase {
       SettingsView(
         store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
           $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in [] }
           $0.push = PushClient.inMemory(granted: true, status: .authorized).client
         }
       )
@@ -109,6 +142,7 @@ final class SettingsSnapshotTests: SnapshotTestCase {
       SettingsView(
         store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
           $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in [] }
           $0.push = PushClient.inMemory(granted: true, status: .authorized).client
         }
       )
@@ -128,6 +162,7 @@ final class SettingsSnapshotTests: SnapshotTestCase {
       SettingsView(
         store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
           $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in [] }
           $0.push = PushClient.inMemory(granted: true, status: .authorized).client
         }
       )
