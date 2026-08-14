@@ -15,7 +15,6 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SCHEME="HermesMobile"
 WORKSPACE="HermesMobile.xcworkspace"
-BUNDLE_ID="me.honcharenko.HermesMobile"
 
 : "${DEVELOPMENT_TEAM:?Set DEVELOPMENT_TEAM=<your 10-char Apple team id> and re-run}"
 
@@ -47,6 +46,15 @@ APP_PATH="$(
     -destination "id=$DEVICE_UDID" -showBuildSettings 2>/dev/null \
     | awk -F' = ' '/ TARGET_BUILD_DIR =/{d=$2} / FULL_PRODUCT_NAME =/{n=$2} END{print d"/"n}'
 )"
+BUNDLE_ID="$(
+  xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Debug \
+    -destination "id=$DEVICE_UDID" -showBuildSettings 2>/dev/null \
+    | awk -F' = ' '/ PRODUCT_BUNDLE_IDENTIFIER =/{print $2; exit}'
+)"
+if [ -z "${BUNDLE_ID:-}" ]; then
+  echo "âœ— Could not determine the built app bundle identifier." >&2
+  exit 1
+fi
 
 echo "▸ Installing $(basename "$APP_PATH")"
 xcrun devicectl device install app --device "$DEVICE_UDID" "$APP_PATH"

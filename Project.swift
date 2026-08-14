@@ -27,7 +27,7 @@ let project = Project(
       name: "HermesMobile",
       destinations: [.iPhone],
       product: .app,
-      bundleId: "me.honcharenko.HermesMobile",
+      bundleId: "com.jbenzaquen.hermesioscontrol",
       deploymentTargets: .iOS("18.0"),
       infoPlist: .extendingDefault(with: [
         // Wire the bundle version/short-version to the build settings below so a
@@ -35,6 +35,7 @@ let project = Project(
         // default otherwise hardcodes CFBundleVersion = 1, ignoring the setting).
         "CFBundleShortVersionString": "$(MARKETING_VERSION)",
         "CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
+        "CFBundleDisplayName": "Hermes Control",
         "UILaunchScreen": ["UIColorName": ""],
         "HermesDefaultServerURL": .string(debugServerURL),
         // The app connects to user-specified self-hosted servers over http (Tailscale/LAN),
@@ -105,7 +106,7 @@ let project = Project(
       name: "HermesMobileTests",
       destinations: [.iPhone],
       product: .unitTests,
-      bundleId: "me.honcharenko.HermesMobileTests",
+      bundleId: "com.jbenzaquen.hermesioscontrol.tests",
       deploymentTargets: .iOS("18.0"),
       sources: ["HermesMobileTests/**"],
       dependencies: [
