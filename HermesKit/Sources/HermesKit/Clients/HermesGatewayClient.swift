@@ -27,6 +27,11 @@ public struct HermesGatewayClient: Sendable {
   /// passed per call — the budget is a property of the server handler, not of the call
   /// site, so it can't be forgotten by a caller.
   public var send: @Sendable (_ method: String, _ params: JSONValue) async throws -> JSONValue
+  /// Inject guidance into the active turn. A successful Hermes wire status of `queued`
+  /// means accepted for the next tool boundary and is exposed as `.accepted` here.
+  public var steer: @Sendable (_ sessionID: String, _ text: String) async throws -> SessionSteerResult
+  /// Correct/redrive the active response while retaining valid work.
+  public var redirect: @Sendable (_ sessionID: String, _ text: String) async throws -> SessionRedirectResult
   /// Tear down the current connection.
   public var disconnect: @Sendable () -> Void
 
@@ -54,6 +59,10 @@ public enum GatewayError: Error, Equatable, Sendable {
   case notConnected
   case disconnected
   case server(String)
+  /// A JSON-RPC/application failure whose numeric code was present on the wire.
+  case rpc(code: Int, message: String)
+  /// The server returned a success payload that does not match the method's contract.
+  case malformedResponse(method: String)
   case timedOut(method: String)
   /// The gated `ws-ticket` mint returned `401` — the cookie session is fully dead and
   /// reconnecting won't help. Surfaced as `GatewayEvent.authExpired` on the stream.
@@ -67,6 +76,8 @@ public enum GatewayError: Error, Equatable, Sendable {
     case .notConnected: "Not connected."
     case .disconnected: "Connection lost."
     case let .server(message): message
+    case let .rpc(_, message): message
+    case let .malformedResponse(method): "Malformed \(method) result."
     case let .timedOut(method): "request timed out: \(method)"
     case .authExpired: "Your session expired. Sign in again."
     case .ticketUnavailable: "Couldn’t obtain a connection ticket."
@@ -74,13 +85,24 @@ public enum GatewayError: Error, Equatable, Sendable {
   }
 
   /// True when the server rejected the request as an unknown JSON-RPC method (`-32601`).
-  /// `InboundFrame` keeps only the error message, not the code, so we match the server's
-  /// stable `"unknown method: <name>"` text — used to gate attachment uploads (#8).
+  /// Coded responses use the protocol code; the message fallback preserves compatibility
+  /// with older gateway bridges that omitted it — used to gate attachment uploads (#8).
   public var isUnknownMethod: Bool {
-    if case let .server(message) = self {
+    switch self {
+    case let .server(message):
       return message.lowercased().hasPrefix("unknown method")
+    case let .rpc(code, message):
+      return code == -32601 || message.lowercased().hasPrefix("unknown method")
+    default:
+      return false
     }
-    return false
+  }
+
+  /// True when Hermes recognized the RPC surface but the current runtime cannot perform it
+  /// (`4010`), or when the gateway does not expose the method at all (`-32601`).
+  public var isUnsupportedOperation: Bool {
+    if case let .rpc(code, _) = self, code == 4010 || code == -32601 { return true }
+    return isUnknownMethod
   }
 
   /// True when the socket dropped (no transport) — distinct from a server-side protocol
@@ -104,15 +126,17 @@ public enum GatewayError: Error, Equatable, Sendable {
 
   /// True when the server rejected the request because the live runtime session id is stale
   /// (e.g. after a background→foreground the agent rebuilt/invalidated the in-memory session).
-  /// `InboundFrame` keeps only the error message, so we match the server's stable
+  /// Hermes has no dedicated stable code for this failure, so match the server's
   /// `"session not found"` text (case-insensitive) — used to self-heal outbound RPCs by
   /// transparently re-resuming for a fresh live id and replaying the call (#17). Mirrors
   /// `isUnknownMethod`.
   public var isSessionNotFound: Bool {
-    if case let .server(message) = self {
+    switch self {
+    case let .server(message), let .rpc(_, message):
       return message.lowercased().contains("session not found")
+    default:
+      return false
     }
-    return false
   }
 }
 
@@ -160,6 +184,13 @@ public extension HermesGatewayClient {
     makeTransport: @escaping @Sendable (_ wsURL: URL) -> any WebSocketTransport
   ) -> HermesGatewayClient {
     let store = ConnectionStore()
+    @Sendable func send(
+      _ method: String,
+      _ params: JSONValue
+    ) async throws -> JSONValue {
+      guard let connection = store.get() else { throw GatewayError.notConnected }
+      return try await connection.send(method: method, params: params)
+    }
     return HermesGatewayClient(
       connect: { baseURL, auth in
         let (stream, continuation) = AsyncStream<GatewayEvent>.makeStream()
@@ -223,9 +254,28 @@ public extension HermesGatewayClient {
         }
         return stream
       },
-      send: { method, params in
-        guard let connection = store.get() else { throw GatewayError.notConnected }
-        return try await connection.send(method: method, params: params)
+      send: send,
+      steer: { sessionID, text in
+        do {
+          let result = try await send(
+            "session.steer",
+            .object(["session_id": .string(sessionID), "text": .string(text)])
+          )
+          return try decodeSteerResult(result)
+        } catch let error as GatewayError where error.isUnsupportedOperation {
+          return .unsupported
+        }
+      },
+      redirect: { sessionID, text in
+        do {
+          let result = try await send(
+            "session.redirect",
+            .object(["session_id": .string(sessionID), "text": .string(text)])
+          )
+          return try decodeRedirectResult(result)
+        } catch let error as GatewayError where error.isUnsupportedOperation {
+          return .unsupported
+        }
       },
       disconnect: {
         let connection = store.get()
@@ -370,6 +420,13 @@ actor GatewayConnection {
         cancelTimeout(id)
         pending.removeValue(forKey: id)?.resume(throwing: GatewayError.server(message))
       }
+    case let .codedFailure(id, code, message):
+      if let id {
+        cancelTimeout(id)
+        pending.removeValue(forKey: id)?.resume(
+          throwing: GatewayError.rpc(code: code, message: message)
+        )
+      }
     case .ignored:
       break
     }
@@ -384,6 +441,31 @@ actor GatewayConnection {
     let outstanding = pending
     pending.removeAll()
     for (_, continuation) in outstanding { continuation.resume(throwing: error) }
+  }
+}
+
+private func decodeSteerResult(_ result: JSONValue) throws -> SessionSteerResult {
+  guard let status = result["status"]?.stringValue,
+        let text = result["text"]?.stringValue
+  else { throw GatewayError.malformedResponse(method: "session.steer") }
+
+  switch status {
+  case "queued": return .accepted(text: text)
+  case "rejected": return .rejected(text: text)
+  default: throw GatewayError.malformedResponse(method: "session.steer")
+  }
+}
+
+private func decodeRedirectResult(_ result: JSONValue) throws -> SessionRedirectResult {
+  guard let status = result["status"]?.stringValue,
+        let text = result["text"]?.stringValue
+  else { throw GatewayError.malformedResponse(method: "session.redirect") }
+
+  switch status {
+  case "redirected": return .redirected(text: text)
+  case "queued": return .queued(text: text)
+  case "rejected": return .rejected(text: text)
+  default: throw GatewayError.malformedResponse(method: "session.redirect")
   }
 }
 
