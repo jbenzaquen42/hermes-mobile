@@ -1,18 +1,70 @@
 import ComposableArchitecture
 import Foundation
 
-/// Root feature: onboarding until connected, then a session list that pushes chat
-/// screens. Wires the child features together via their delegate actions.
+/// Root feature: onboarding until connected, then the five-destination application shell.
+/// Chats retains the existing session-list → live-chat navigation and ownership policy;
+/// Home and Settings are sibling children, while unsupported modules stay inert placeholders.
 @Reducer
 public struct AppFeature {
   @ObservableState
   public struct State: Equatable {
     public var onboarding: ConnectionFeature.State
-    public var home: SessionListFeature.State?
+    /// The selected top-level destination while connected. Home is the default landing;
+    /// chat deep links and chat-creating quick actions select Chats before pushing a marker.
+    public var selectedDestination: AppDestination
+    /// The independently-loading operational dashboard. Its failure state is isolated from
+    /// Chats: a failed Home card can never remove or replace the session list below.
+    public var dashboard: HomeFeature.State?
+    /// The existing session list is intentionally kept under its historical `home` name for
+    /// source compatibility. In the new shell this state powers the Chats destination.
+    public var home: SessionListFeature.State? {
+      didSet {
+        // Keep the connected-shell invariant even in TestStore expectation closures and
+        // snapshot fixtures that historically assigned only `home`.
+        if let home {
+          if oldValue == nil {
+            selectedDestination = .home
+          }
+          if dashboard == nil {
+            dashboard = HomeFeature.State(connection: home.connection)
+          } else if dashboard?.connection != home.connection {
+            // The legacy Settings sheet still lives under SessionList for source/UI
+            // compatibility. A token save there mutates the Chats connection in the child;
+            // mirror it into Home so both Settings entry points stay authenticated.
+            dashboard?.connection = home.connection
+          }
+          if liveChat?.connection.baseURL == home.connection.baseURL,
+             liveChat?.connection != home.connection {
+            // A detached slot may outlive Chats while the token is replaced. Keep the next
+            // reconnect on the new credential without disturbing its current socket/effects.
+            liveChat?.connection = home.connection
+          }
+        } else {
+          dashboard = nil
+          settings = nil
+          selectedDestination = .home
+        }
+      }
+    }
+    /// Root Settings destination. Created lazily when selected and cleared when another tab is
+    /// chosen, so its debug-log stream retains the old sheet's presentation lifetime.
+    public var settings: SettingsFeature.State?
+    /// Board and Automations have no reducer/action surface until their server contracts are
+    /// verified. Availability lets the shell explain that boundary without issuing an RPC.
+    public var boardAvailability: AppDestinationAvailability
+    public var automationsAvailability: AppDestinationAvailability
     /// The navigation path holds only thin session-key markers (`ChatScreen.State`) — the
     /// real chat state lives in the `liveChat` slot below, so popping a marker never
     /// destroys the chat's state or effects by itself.
-    public var path: StackState<ChatScreen.State>
+    public var path: StackState<ChatScreen.State> {
+      didSet {
+        // A pushed marker is only renderable in Chats. This also preserves the invariant in
+        // older tests/fixtures that build navigation by appending directly to `path`.
+        if !path.isEmpty {
+          selectedDestination = .chats
+        }
+      }
+    }
     /// The app-owned "live chat slot": the one open (or detached-but-live) chat. Composed
     /// via `.ifLet`, so its socket, reconnect backoff, thinking ticker, and debounced
     /// persist are slot-rooted and survive navigation pops. One live session at a time —
@@ -70,7 +122,16 @@ public struct AppFeature {
 
     public init(
       onboarding: ConnectionFeature.State = .init(),
+      selectedDestination: AppDestination = .home,
+      dashboard: HomeFeature.State? = nil,
       home: SessionListFeature.State? = nil,
+      settings: SettingsFeature.State? = nil,
+      boardAvailability: AppDestinationAvailability = .unavailable(
+        reason: "Board requires a verified Kanban server module."
+      ),
+      automationsAvailability: AppDestinationAvailability = .unavailable(
+        reason: "Automation editing is not available on this server yet."
+      ),
       path: StackState<ChatScreen.State> = .init(),
       liveChat: ChatFeature.State? = nil,
       autoConnecting: Bool = false,
@@ -79,7 +140,12 @@ public struct AppFeature {
       pendingApprovalSessionIDs: Set<String> = []
     ) {
       self.onboarding = onboarding
+      self.selectedDestination = path.isEmpty ? selectedDestination : .chats
+      self.dashboard = dashboard ?? home.map { HomeFeature.State(connection: $0.connection) }
       self.home = home
+      self.settings = settings
+      self.boardAvailability = boardAvailability
+      self.automationsAvailability = automationsAvailability
       self.path = path
       self.liveChat = liveChat
       self.autoConnecting = autoConnecting
@@ -94,8 +160,22 @@ public struct AppFeature {
     /// (user on the list) reads `nil` so pushes for that session are NOT suppressed.
     /// Drives foreground push suppression via `.onChange`.
     var currentViewingSessionID: String? {
-      guard !path.isEmpty else { return nil }
+      guard selectedDestination == .chats, !path.isEmpty else { return nil }
       return liveChat?.sessionKey
+    }
+
+    /// The capability status the connected shell renders for a destination. Home, Chats,
+    /// and Settings are local app capabilities; Board and Automations must be explicitly
+    /// enabled by future verified server probes before they can gain live reducers.
+    public func availability(for destination: AppDestination) -> AppDestinationAvailability {
+      switch destination {
+      case .home, .chats, .settings:
+        return .available
+      case .board:
+        return boardAvailability
+      case .automations:
+        return automationsAvailability
+      }
     }
 
     /// Which root branch the app shell renders. The precedence is **logic, not layout**, so it
@@ -131,6 +211,10 @@ public struct AppFeature {
 
   public enum Action {
     case task
+    /// Select one of the connected shell's five top-level destinations. Unsupported Board
+    /// and Automations may be selected to show their isolated explanatory placeholders, but
+    /// intentionally have no child action surface.
+    case destinationSelected(AppDestination)
     case autoConnectSucceeded(ServerConnection)
     /// The launch probe failed. The `RESTError` decides where we land, via the one rule in
     /// `ConnectionFailedFeature.isRetryable`: only a credentials verdict (`.unauthorized`, or
@@ -152,7 +236,13 @@ public struct AppFeature {
     case onboarding(ConnectionFeature.Action)
     /// The launch retry screen's actions (present only while the slot is filled).
     case connectionFailed(ConnectionFailedFeature.Action)
+    case dashboard(HomeFeature.Action)
+    /// Historical name retained for source compatibility; this is the Chats child.
     case home(SessionListFeature.Action)
+    case settings(SettingsFeature.Action)
+    /// Clear the lazily-created root Settings child on a follow-up action, after a delegate
+    /// action has had a chance to reduce through the child.
+    case clearSettings
     case path(StackActionOf<ChatScreen>)
     /// The pushed chat view finished leaving the screen (sent by the destination in
     /// `AppView` — never through the child scope, so a nil slot can be guarded here
@@ -245,11 +335,38 @@ public struct AppFeature {
           }
         )
 
+      case let .destinationSelected(destination):
+        // Destination selection exists only inside the connected shell. Keeping this guard in
+        // the reducer prevents a stale UI/deep-link action from constructing authenticated
+        // children while onboarding or on the retry screen.
+        guard let chats = state.home else { return .none }
+        guard destination != state.selectedDestination else { return .none }
+
+        let wasShowingChat = state.selectedDestination == .chats && !state.path.isEmpty
+        if state.selectedDestination == .settings {
+          // Settings owns a long-running debug-log stream. Match its old sheet lifetime by
+          // dropping the child whenever its tab stops being visible.
+          state.settings = nil
+        }
+        state.selectedDestination = destination
+        if destination == .settings {
+          state.settings = makeSettingsState(chats: chats)
+        }
+
+        guard wasShowingChat else { return .none }
+        // Moving to another top-level destination is a real chat-view disappearance. Reset
+        // the marker, then reuse the established detach policy: running/queued work keeps the
+        // slot alive; an idle chat is persisted, torn down, and cleared. As with a navigation
+        // pop, `AppView` sends `.chatViewDisappeared` after the outgoing view actually leaves;
+        // do not fire it early here or the view would deliver cleanup twice.
+        state.path.removeAll()
+        return .none
+
       case let .autoConnectSucceeded(connection):
         state.autoConnecting = false
         // Defensive: a retry screen and a live list must never coexist (see the `.task` guard).
         state.connectionFailed = nil
-        state.home = makeHomeState(connection: connection)
+        makeConnectedShell(&state, connection: connection)
         return replayPendingPushTap(&state)
 
       case let .autoConnectFailed(connection, error):
@@ -273,7 +390,7 @@ public struct AppFeature {
         // The retry validated the stored session — identical landing to a successful launch
         // auto-connect, cold-launch push-tap replay included.
         state.connectionFailed = nil
-        state.home = makeHomeState(connection: connection)
+        makeConnectedShell(&state, connection: connection)
         return replayPendingPushTap(&state)
 
       case let .connectionFailed(.delegate(.credentialsRejected(connection))):
@@ -298,7 +415,10 @@ public struct AppFeature {
         state.connectionFailed = nil
         state.path = .init()
         state.liveChat = nil
+        state.dashboard = nil
         state.home = nil
+        state.settings = nil
+        state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
         state.pendingPushTapServerURL = nil
@@ -321,6 +441,7 @@ public struct AppFeature {
             .cancel(id: CancelID.backgroundGrace),
             .run { [backgroundTask] _ in await backgroundTask.end() },
             state.liveChat != nil ? .send(.liveChat(.foreground)) : .none,
+            state.dashboard != nil ? .send(.dashboard(.foreground)) : .none,
             state.home != nil ? .send(.home(.pulledToRefresh)) : .none,
             // Stuck on the retry screen? Foregrounding is exactly the moment the user just
             // flipped the VPN back on — re-probe without making them tap. The child SUPERSEDES
@@ -432,13 +553,109 @@ public struct AppFeature {
         // never coexist. `AppView` would render `home` while the `ifLet` child stayed alive,
         // re-probing on every foreground for the process lifetime.
         state.connectionFailed = nil
-        state.home = makeHomeState(connection: connection)
+        makeConnectedShell(&state, connection: connection)
         // Auto-connect failure falls back to onboarding, so a manual login must also replay
         // a stashed cold-launch tap (#46).
         return replayPendingPushTap(&state)
 
+      case .dashboard(.delegate(.newChat)):
+        // Home never owns chat construction. Route through the existing SessionList delegate
+        // so profile scoping, slot replacement, and composer preference seeding stay singular.
+        guard state.home != nil else { return .none }
+        return .send(.home(.delegate(.createSession(initialComposerText: nil))))
+
+      case let .dashboard(.delegate(.openSession(id))):
+        guard let chats = state.home else { return .none }
+        // Prefer the loaded row for its resolved title; Home summaries and the active-chat
+        // shortcut may also point at a session outside the current list, which the established
+        // minimal-session resume path already supports.
+        let session = chats.sessions[id: id] ?? Session(id: id)
+        return .send(.home(.delegate(.openSession(session))))
+
+      case .dashboard(.delegate(.createKanbanTask)):
+        // Require the successfully-loaded Kanban card as the capability proof even if a stale
+        // or programmatic delegate slips past the disabled button. Phase 2 still has no Board
+        // reducer: mark the module verified and show the placeholder without another RPC.
+        guard state.dashboard?.cards.kanbanStatus.hasLoadedValue == true,
+              state.dashboard?.cards.kanbanStatus.isUnsupported == false
+        else { return .none }
+        state.boardAvailability = .available
+        return .send(.destinationSelected(.board))
+
+      case .dashboard(.delegate(.createScheduledJob)):
+        // Same isolation rule as Board. A successful cron-attention card proves the module,
+        // but create/edit behavior belongs to the later Automations phase.
+        guard state.dashboard?.cards.cronAttention.hasLoadedValue == true,
+              state.dashboard?.cards.cronAttention.isUnsupported == false
+        else { return .none }
+        state.automationsAvailability = .available
+        return .send(.destinationSelected(.automations))
+
+      case let .dashboard(.delegate(.openPendingInteraction(interaction))):
+        guard let chats = state.home else { return .none }
+        if interaction.kind == .approval {
+          // Reuse the existing approval-recovery handshake: the normal open route reads this
+          // marker before clearing it and arms `expectsPendingApproval` on the chat. A
+          // clarification opens normally because its payload cannot be synthesized here.
+          state.pendingApprovalSessionIDs.insert(interaction.sessionID)
+        }
+        let session = chats.sessions[id: interaction.sessionID]
+          ?? Session(id: interaction.sessionID)
+        return .send(.home(.delegate(.openSession(session))))
+
+      case let .settings(.delegate(.tokenSaved(token))):
+        // Settings updates its own connection before delegating. Keep every authenticated
+        // sibling on the same token so the next Home refresh or Chats action cannot use the
+        // stale credential.
+        state.home?.connection.token = token
+        state.dashboard?.connection.token = token
+        return .none
+
+      case .settings(.delegate(.disconnect)):
+        // Let the child reduce the delegate first, then clear its optional state and reuse the
+        // existing Chats disconnect route (badge, push unregister, and shell teardown included).
+        return .concatenate(
+          .send(.clearSettings),
+          .send(.home(.delegate(.disconnect)))
+        )
+
+      case .settings(.delegate(.reconnect)):
+        state.selectedDestination = .chats
+        return .concatenate(
+          .send(.clearSettings),
+          .merge(
+            state.home != nil ? .send(.home(.pulledToRefresh)) : .none,
+            state.dashboard != nil ? .send(.dashboard(.pulledToRefresh)) : .none
+          )
+        )
+
+      case let .settings(
+        .delegate(.chatInputPreferencesChanged(behavior, queueingEnabled))
+      ):
+        state.liveChat?.midTurnBehavior = behavior
+        state.liveChat?.queueingEnabled = queueingEnabled
+        return .none
+
+      case .settings(.delegate(.installPushPlugin)):
+        // Root Settings is not a sheet, but the intent is identical: leave Settings and open
+        // a reviewable, pre-filled chat through the SessionList delegate path.
+        return .concatenate(
+          .send(.clearSettings),
+          .send(
+            .home(
+              .delegate(.createSession(initialComposerText: PushSetup.installPrompt))
+            )
+          )
+        )
+
+      case .clearSettings:
+        state.settings = nil
+        return .none
+
       case let .home(.delegate(.openSession(session))):
         guard let home = state.home else { return .none }
+        state.selectedDestination = .chats
+        state.settings = nil
         // Approval-recovery hint (#30 workaround): a badged session (approval push tapped or
         // received) may have missed the real `approval.request` while detached — read the flag
         // BEFORE clearing the badge entry so the hydrating chat can synthesize a generic card
@@ -563,7 +780,10 @@ public struct AppFeature {
         let connection = state.home?.connection
         state.path = .init()
         state.liveChat = nil
+        state.dashboard = nil
         state.home = nil
+        state.settings = nil
+        state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
         state.pendingPushTapServerURL = nil
@@ -600,7 +820,7 @@ public struct AppFeature {
         state.pendingPushTap = nil
         state.pendingPushTapServerURL = nil
         state.pendingApprovalSessionIDs = []
-        state.home = makeHomeState(connection: connection)
+        makeConnectedShell(&state, connection: connection)
         return setBadge(state)
 
       case .reauth(.presented(.delegate(.quit))):
@@ -616,7 +836,10 @@ public struct AppFeature {
         state.reauth = nil
         state.path = .init()
         state.liveChat = nil
+        state.dashboard = nil
         state.home = nil
+        state.settings = nil
+        state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
         state.pendingPushTapServerURL = nil
@@ -676,15 +899,22 @@ public struct AppFeature {
         else { return glow }
         return .concatenate(glow, teardownSlot())
 
-      case .onboarding, .connectionFailed, .home, .path, .reauth, .liveChat:
+      case .onboarding, .connectionFailed, .dashboard, .home, .settings, .path, .reauth,
+           .liveChat:
         return .none
       }
     }
     .ifLet(\.connectionFailed, action: \.connectionFailed) {
       ConnectionFailedFeature()
     }
+    .ifLet(\.dashboard, action: \.dashboard) {
+      HomeFeature()
+    }
     .ifLet(\.home, action: \.home) {
       SessionListFeature()
+    }
+    .ifLet(\.settings, action: \.settings) {
+      SettingsFeature()
     }
     .ifLet(\.$reauth, action: \.reauth) {
       ReauthFeature()
@@ -702,6 +932,23 @@ public struct AppFeature {
     .onChange(of: \.currentViewingSessionID) { _, newValue in
       Reduce { _, _ in
         .run { [push] _ in push.setCurrentSession(newValue) }
+      }
+    }
+    // Hermes has no global pending-interaction read endpoint. While Home is visible, project
+    // the process-local approval knowledge AppFeature already owns into its card; the child
+    // action also cancels the unsupported network probe so a late response cannot erase it.
+    .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
+      Reduce { state, _ in
+        guard state.dashboard?.isVisible == true else { return .none }
+        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
+      }
+    }
+    // A badge may have arrived while another tab was selected. Seed the same process-local
+    // summaries when Home becomes visible rather than waiting for another set mutation.
+    .onChange(of: \.dashboard?.isVisible) { _, isVisible in
+      Reduce { state, _ in
+        guard isVisible == true, state.dashboard != nil else { return .none }
+        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
       }
     }
   }
@@ -733,6 +980,42 @@ public struct AppFeature {
       .run { [backgroundTask] _ in await backgroundTask.end() },
       .concatenate(chain)
     )
+  }
+
+  /// Install all state owned by the connected shell in one place. Login, launch auto-connect,
+  /// retry success, and a different-user reauth must land on an identical Home-first shell;
+  /// partial dashboard failures then remain inside `HomeFeature` and cannot remove Chats.
+  private func makeConnectedShell(_ state: inout State, connection: ServerConnection) {
+    state.selectedDestination = .home
+    state.dashboard = HomeFeature.State(connection: connection)
+    state.home = makeHomeState(connection: connection)
+    state.settings = nil
+  }
+
+  /// Build the root Settings destination from the latest Chats capability state and persisted
+  /// running-turn preferences. It is recreated on every selection so capabilities discovered
+  /// since login (notably push-plugin support) never paint stale controls.
+  private func makeSettingsState(chats: SessionListFeature.State) -> SettingsFeature.State {
+    SettingsFeature.State(
+      connection: chats.connection,
+      pushAvailable: chats.pushAvailable,
+      midTurnBehavior: preferences.loadMidTurnBehavior(),
+      queueingEnabled: preferences.loadQueueingEnabled()
+    )
+  }
+
+  /// Deterministic, non-sensitive Home summaries for approval ids learned from push routing.
+  /// Clarifications are intentionally absent: without their ephemeral gateway payload the app
+  /// cannot safely reconstruct them, whereas ChatFeature already owns an approval fallback.
+  private static func pendingApprovals(in state: State) -> [HomePendingInteraction] {
+    state.pendingApprovalSessionIDs.sorted().map { sessionID in
+      HomePendingInteraction(
+        id: "approval:\(sessionID)",
+        sessionID: sessionID,
+        kind: .approval,
+        title: state.home?.sessions[id: sessionID]?.resolvedTitle
+      )
+    }
   }
 
   /// Build a fresh session-list state, seeding the device-local persisted profile
@@ -807,6 +1090,10 @@ public struct AppFeature {
     var chat = incomingChat
     chat.midTurnBehavior = preferences.loadMidTurnBehavior()
     chat.queueingEnabled = preferences.loadQueueingEnabled()
+    // Every chat entry point (Chats row, Home quick action/card, push, branch, Settings
+    // install prompt) converges here, so this is the one selection rule.
+    state.selectedDestination = .chats
+    state.settings = nil
     state.liveChat = chat
     state.path.removeAll()
     state.path.append(ChatScreen.State(sessionKey: chat.sessionKey))
