@@ -7,6 +7,11 @@ import UIKit
 /// the live connection debug log.
 struct SettingsView: View {
   @Bindable var store: StoreOf<SettingsFeature>
+  /// Injected until `SettingsFeature` owns the persisted preference. Keeping these optional
+  /// lets the UI and steering reducer land independently without presenting controls that
+  /// cannot save yet; integration supplies both bindings together.
+  var midTurnBehavior: Binding<ChatFeature.MidTurnBehavior>? = nil
+  var queueingEnabled: Binding<Bool>? = nil
   /// Presentation-only: the "how push works / install the plugin" info sheet. Pure view
   /// state — there's no reducer behavior behind it.
   @State private var showingPushGuide = false
@@ -15,6 +20,13 @@ struct SettingsView: View {
     Form {
       Section("Server") {
         LabeledContent("URL", value: store.serverURLString)
+      }
+
+      if let midTurnBehavior, let queueingEnabled {
+        RunningTurnSettingsSection(
+          behavior: midTurnBehavior,
+          queueingEnabled: queueingEnabled
+        )
       }
 
       Section {

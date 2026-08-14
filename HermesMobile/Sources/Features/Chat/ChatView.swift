@@ -47,6 +47,7 @@ struct ChatView: View {
         isSending: store.isSending,
         canSend: store.canSend,
         canQueue: store.canQueue,
+        runningTurnActions: runningTurnActions,
         model: store.model,
         reasoningEffort: store.reasoningEffort,
         usage: store.usage,
@@ -126,6 +127,35 @@ struct ChatView: View {
         )
       }
     }
+  }
+
+  /// Maps reducer-owned preference/capability state onto the composer's presentation-only
+  /// action model. Explicit menu choices bypass the preference; the emphasized control
+  /// reflects it, with Ask every time represented by an emphasized choice menu.
+  private var runningTurnActions: RunningTurnActionConfiguration {
+    var available = Set<RunningTurnAction>()
+    if store.canSteer { available.insert(.steer) }
+    if store.canRedirect { available.insert(.redirect) }
+    if store.canQueue { available.insert(.sendAfterCompletion) }
+
+    let primaryAction: RunningTurnAction? = switch store.midTurnBehavior {
+    case .steer: .steer
+    case .redirect: .redirect
+    case .queue: .sendAfterCompletion
+    case .askEveryTime: nil
+    }
+
+    return RunningTurnActionConfiguration(
+      primaryAction: primaryAction,
+      availableActions: available,
+      onSelect: { action in
+        switch action {
+        case .steer: store.send(.steerSubmitted)
+        case .redirect: store.send(.redirectSubmitted)
+        case .sendAfterCompletion: store.send(.queueSubmitted)
+        }
+      }
+    )
   }
 
   /// Drives the rename alert's presentation; dismissing routes through `.cancelRename`.
