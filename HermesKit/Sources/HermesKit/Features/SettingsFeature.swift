@@ -52,6 +52,7 @@ public struct SettingsFeature {
     @Presents public var profileEditor: ProfileEditorFeature.State?
     @Presents public var addProfile: AddProfileFeature.State?
     @Presents public var capabilityManagement: CapabilityManagementFeature.State?
+    @Presents public var memory: MemoryFeature.State?
 
     /// The outcome of a "send test notification" attempt, surfaced in the view/snapshots.
     public enum TestPushStatus: Equatable, Sendable {
@@ -96,7 +97,8 @@ public struct SettingsFeature {
       activeWorkflowProfileName: String? = nil,
       profileEditor: ProfileEditorFeature.State? = nil,
       addProfile: AddProfileFeature.State? = nil,
-      capabilityManagement: CapabilityManagementFeature.State? = nil
+      capabilityManagement: CapabilityManagementFeature.State? = nil,
+      memory: MemoryFeature.State? = nil
     ) {
       self.connection = connection
       self.token = connection.token ?? ""
@@ -117,6 +119,7 @@ public struct SettingsFeature {
       self.profileEditor = profileEditor
       self.addProfile = addProfile
       self.capabilityManagement = capabilityManagement
+      self.memory = memory
     }
 
     /// The installed plugin is behind `PushSetup.minimumPluginVersion` AND the agent can pull
@@ -177,10 +180,12 @@ public struct SettingsFeature {
     case profileListResponse(ProfileListResponse)
     case profileTapped(ProfileAdminSummary)
     case manageCapabilitiesTapped(ProfileAdminSummary)
+    case manageMemoryTapped(ProfileAdminSummary)
     case addProfileTapped
     case addProfile(PresentationAction<AddProfileFeature.Action>)
     case profileEditor(PresentationAction<ProfileEditorFeature.Action>)
     case capabilityManagement(PresentationAction<CapabilityManagementFeature.Action>)
+    case memory(PresentationAction<MemoryFeature.Action>)
     case delegate(Delegate)
 
     public enum ProfileListResponse: Equatable, Sendable {
@@ -313,6 +318,15 @@ public struct SettingsFeature {
         )
         return .none
 
+      case let .manageMemoryTapped(summary):
+        guard let authoritative = state.profiles[id: summary.id] else { return .none }
+        state.memory = MemoryFeature.State(
+          connection: state.connection,
+          profileName: authoritative.name,
+          isServerDefaultProfile: authoritative.isDefault
+        )
+        return .none
+
       case .addProfileTapped:
         if case .unsupported = state.profileLoadState { return .none }
         state.addProfile = AddProfileFeature.State(connection: state.connection)
@@ -359,6 +373,13 @@ public struct SettingsFeature {
         return .send(.loadProfiles)
 
       case .capabilityManagement:
+        return .none
+
+      case .memory(.presented(.delegate(.closed))):
+        state.memory = nil
+        return .none
+
+      case .memory:
         return .none
 
       case let .pushPluginInfoLoaded(info):
@@ -544,6 +565,9 @@ public struct SettingsFeature {
     }
     .ifLet(\.$capabilityManagement, action: \.capabilityManagement) {
       CapabilityManagementFeature()
+    }
+    .ifLet(\.$memory, action: \.memory) {
+      MemoryFeature()
     }
   }
 }

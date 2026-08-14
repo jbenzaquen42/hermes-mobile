@@ -40,7 +40,8 @@ final class ProfileAdministrationSnapshotTests: SnapshotTestCase {
         onReload: {},
         onAdd: {},
         onSelect: { _ in },
-        onManageCapabilities: { _ in }
+        onManageCapabilities: { _ in },
+        onManageMemory: { _ in }
       )
     }
 
@@ -55,7 +56,8 @@ final class ProfileAdministrationSnapshotTests: SnapshotTestCase {
         onReload: {},
         onAdd: {},
         onSelect: { _ in },
-        onManageCapabilities: { _ in }
+        onManageCapabilities: { _ in },
+        onManageMemory: { _ in }
       )
     }
 

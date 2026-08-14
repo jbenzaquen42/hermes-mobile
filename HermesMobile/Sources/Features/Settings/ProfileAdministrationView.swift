@@ -22,6 +22,10 @@ struct ProfileAdministrationView: View {
       onManageCapabilities: { selected in
         guard let profile = store.profiles[id: selected.id] else { return }
         store.send(.manageCapabilitiesTapped(profile))
+      },
+      onManageMemory: { selected in
+        guard let profile = store.profiles[id: selected.id] else { return }
+        store.send(.manageMemoryTapped(profile))
       }
     )
     .navigationDestination(
@@ -33,6 +37,11 @@ struct ProfileAdministrationView: View {
       item: $store.scope(state: \.capabilityManagement, action: \.capabilityManagement)
     ) { capabilityStore in
       CapabilityManagementView(store: capabilityStore)
+    }
+    .navigationDestination(
+      item: $store.scope(state: \.memory, action: \.memory)
+    ) { memoryStore in
+      MemoryManagementView(store: memoryStore)
     }
     .sheet(item: $store.scope(state: \.addProfile, action: \.addProfile)) { addProfileStore in
       NavigationStack {
