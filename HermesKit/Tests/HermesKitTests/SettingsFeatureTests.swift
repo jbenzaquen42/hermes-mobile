@@ -278,6 +278,7 @@ struct SettingsFeatureTests {
       }
       // `.task` also probes the plugin hub for the version. `.unknown` offers no update.
       $0.hermesREST.pushPluginInfo = { @Sendable _ in PushPluginInfo(status: .unknown) }
+      $0.hermesProfileAdmin.list = { @Sendable _, _ in [] }
     }
 
     await store.send(.task)
@@ -301,6 +302,7 @@ struct SettingsFeatureTests {
       $0.debugLog.stream = { @Sendable in AsyncStream { $0.finish() } }
       $0.push = push.client
       $0.hermesREST.pushPluginInfo = { @Sendable _ in PushPluginInfo(status: .unknown) }
+      $0.hermesProfileAdmin.list = { @Sendable _, _ in [] }
     }
     store.exhaustivity = .off(showSkippedAssertions: false)
 
@@ -472,6 +474,7 @@ struct SettingsFeatureTests {
       $0.hermesREST.pushPluginInfo = { @Sendable _ in
         PushPluginInfo(status: .ready, version: "0.1.0", canUpdateGit: true)
       }
+      $0.hermesProfileAdmin.list = { @Sendable _, _ in [] }
     }
     store.exhaustivity = .off
 
@@ -492,6 +495,7 @@ struct SettingsFeatureTests {
       $0.hermesREST.pushPluginInfo = { @Sendable _ in
         PushPluginInfo(status: .ready, version: "0.1.0", canUpdateGit: false)
       }
+      $0.hermesProfileAdmin.list = { @Sendable _, _ in [] }
     }
     store.exhaustivity = .off
 
@@ -513,6 +517,7 @@ struct SettingsFeatureTests {
         SettingsFeature()
       } withDependencies: {
         $0.hermesREST.pushPluginInfo = { @Sendable _ in info }
+        $0.hermesProfileAdmin.list = { @Sendable _, _ in [] }
       }
       store.exhaustivity = .off
 

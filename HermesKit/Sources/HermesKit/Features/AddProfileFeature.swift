@@ -5,11 +5,10 @@ import Foundation
 /// desktop's create-profile dialog: a name (validated against `ProfileName`), a
 /// "clone from default" toggle, and an optional SOUL.md body.
 ///
-/// Creating is a two-call sequence (matching the desktop): `profiles.create` then, when
-/// the SOUL.md text is non-blank, `profiles.updateSoul`. On success it emits
+/// Creating uses the native `profiles.create` RPC, including optional SOUL content in the
+/// same typed request. On success it emits
 /// `.delegate(.created(name:))` so the parent can refresh and select the new profile; on
-/// failure it surfaces the `RESTError.message` (a server 400 detail verbatim) in an
-/// inline error banner.
+/// failure it surfaces the safe profile-admin error message in an inline error banner.
 @Reducer
 public struct AddProfileFeature {
   @ObservableState
@@ -20,6 +19,8 @@ public struct AddProfileFeature {
     public var soul: String
     public var isCreating: Bool
     public var errorBanner: String?
+    /// `false` only after Hermes authoritatively rejects `profiles.create` as unsupported.
+    public var createSupported: Bool?
 
     /// Inline name validation: `nil` while the field is empty (so the form starts clean),
     /// otherwise `ProfileName.hint` when the typed name fails the profile-name pattern.
@@ -34,6 +35,7 @@ public struct AddProfileFeature {
     public var canCreate: Bool {
       let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
       return !trimmed.isEmpty && ProfileName.isValid(trimmed) && !isCreating
+        && createSupported != false
     }
 
     public init(
@@ -42,7 +44,8 @@ public struct AddProfileFeature {
       cloneFromDefault: Bool = true,
       soul: String = "",
       isCreating: Bool = false,
-      errorBanner: String? = nil
+      errorBanner: String? = nil,
+      createSupported: Bool? = nil
     ) {
       self.connection = connection
       self.name = name
@@ -50,14 +53,15 @@ public struct AddProfileFeature {
       self.soul = soul
       self.isCreating = isCreating
       self.errorBanner = errorBanner
+      self.createSupported = createSupported
     }
   }
 
   public enum Action: BindableAction {
     case binding(BindingAction<State>)
     case createTapped
-    /// Result of the create-then-soul sequence — the success payload is the new name.
-    case createResponse(Result<String, RESTError>)
+    /// Result of the native create request — the success payload is the new name.
+    case createResponse(Result<String, CreateFailure>)
     case cancelTapped
     case delegate(Delegate)
 
@@ -66,9 +70,19 @@ public struct AddProfileFeature {
       /// A profile was created — the parent refreshes the list and selects it.
       case created(name: String)
     }
+
+    public struct CreateFailure: Error, Equatable, Sendable {
+      public var message: String
+      public var isUnsupported: Bool
+
+      public init(message: String, isUnsupported: Bool = false) {
+        self.message = message
+        self.isUnsupported = isUnsupported
+      }
+    }
   }
 
-  @Dependency(\.hermesProfiles) var profiles
+  @Dependency(\.hermesProfileAdmin) var profileAdmin
   @Dependency(\.dismiss) var dismiss
 
   public init() {}
@@ -86,26 +100,42 @@ public struct AddProfileFeature {
         state.errorBanner = nil
         let name = state.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let soul = state.soul.trimmingCharacters(in: .whitespacesAndNewlines)
-        return .run { [profiles, connection = state.connection, cloneFromDefault = state.cloneFromDefault] send in
+        return .run { [profileAdmin, connection = state.connection, cloneFromDefault = state.cloneFromDefault] send in
           do {
-            try await profiles.create(connection, name, cloneFromDefault)
-            if !soul.isEmpty {
-              try await profiles.updateSoul(connection, name, soul)
+            let result = try await profileAdmin.create(
+              connection,
+              ProfileCreateRequest(
+                name: name,
+                cloneFrom: cloneFromDefault ? SessionListFeature.State.defaultProfileName : nil,
+                cloneAll: cloneFromDefault,
+                soul: soul.isEmpty ? nil : soul
+              )
+            )
+            guard result.ok, result.name == name else {
+              await send(.createResponse(.failure(.init(
+                message: "Hermes did not create the profile."
+              ))))
+              return
             }
-            await send(.createResponse(.success(name)))
-          } catch let error as RESTError {
-            await send(.createResponse(.failure(error)))
+            await send(.createResponse(.success(result.name)))
+          } catch let error as ProfileAdminError {
+            await send(.createResponse(.failure(.init(
+              message: error.message,
+              isUnsupported: error == .unsupported
+            ))))
           } catch {
-            await send(.createResponse(.failure(.unreachable)))
+            await send(.createResponse(.failure(.init(message: "Couldn’t create the profile."))))
           }
         }
 
       case let .createResponse(.success(name)):
         state.isCreating = false
+        state.createSupported = true
         return .send(.delegate(.created(name: name)))
 
       case let .createResponse(.failure(error)):
         state.isCreating = false
+        if error.isUnsupported { state.createSupported = false }
         state.errorBanner = error.message
         return .none
 
