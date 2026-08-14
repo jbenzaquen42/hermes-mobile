@@ -21,6 +21,8 @@ struct ChatQueueTests {
     state.storedSessionID = "stored123"
     state.status = .ready
     state.isSending = true
+    state.midTurnBehavior = .queue
+    state.queueingEnabled = true
     state.composerText = composerText
     return state
   }
@@ -102,6 +104,16 @@ struct ChatQueueTests {
   }
 
   // MARK: Enqueue gates
+
+  @Test func queueIsDisabledByDefault() async {
+    var initial = runningState(composerText: "keep this draft")
+    initial.queueingEnabled = false
+    let store = TestStore(initialState: initial) { ChatFeature() }
+
+    await store.send(.queueSubmitted)
+    #expect(store.state.composerText == "keep this draft")
+    #expect(store.state.queuedPrompts.isEmpty)
+  }
 
   @Test func pendingApprovalBlocksQueuing() async {
     var initial = runningState(composerText: "queued behind a card")
