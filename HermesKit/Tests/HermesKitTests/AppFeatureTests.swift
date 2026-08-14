@@ -3231,6 +3231,25 @@ struct AppFeatureTests {
     }
   }
 
+  @Test func selectingSettingsCarriesTheRunningWorkflowProfileForCapabilityWarnings() async {
+    var chat = ChatFeature.State(connection: connection, profileName: "ios-release")
+    chat.isSending = true
+    let store = TestStore(
+      initialState: AppFeature.State(
+        home: SessionListFeature.State(connection: connection),
+        liveChat: chat
+      )
+    ) { AppFeature() }
+
+    await store.send(.destinationSelected(.settings)) {
+      $0.selectedDestination = .settings
+      $0.settings = SettingsFeature.State(
+        connection: self.connection,
+        activeWorkflowProfileName: "ios-release"
+      )
+    }
+  }
+
   @Test func homeNewChatDelegateReusesChatsSlotNavigation() async {
     let store = TestStore(
       initialState: AppFeature.State(home: SessionListFeature.State(connection: connection))

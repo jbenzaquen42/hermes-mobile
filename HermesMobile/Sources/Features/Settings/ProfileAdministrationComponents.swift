@@ -44,6 +44,7 @@ struct ProfileAdministrationList: View {
   let onReload: () -> Void
   let onAdd: () -> Void
   let onSelect: (ProfileSummaryPresentation) -> Void
+  let onManageCapabilities: (ProfileSummaryPresentation) -> Void
 
   var body: some View {
     Group {
@@ -102,21 +103,34 @@ struct ProfileAdministrationList: View {
 
       Section {
         ForEach(profiles) { profile in
-          Button {
-            onSelect(profile)
-          } label: {
-            HStack(spacing: 10) {
-              ProfileAdministrationRow(profile: profile)
-              Spacer(minLength: 4)
-              Image(systemName: "chevron.forward")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+          HStack(spacing: 4) {
+            Button {
+              onSelect(profile)
+            } label: {
+              HStack(spacing: 10) {
+                ProfileAdministrationRow(profile: profile)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.forward")
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(.tertiary)
+                  .accessibilityHidden(true)
+              }
+              .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens profile settings")
+
+            Button {
+              onManageCapabilities(profile)
+            } label: {
+              Image(systemName: "slider.horizontal.3")
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Manage capabilities for \(profile.name)")
+            .accessibilityHint("Opens Skills, Toolsets, and MCP settings")
           }
-          .buttonStyle(.plain)
-          .accessibilityHint("Opens profile settings")
         }
       } footer: {
         Text("Each profile has its own model, persona, skills, toolsets, and MCP servers.")

@@ -18,12 +18,21 @@ struct ProfileAdministrationView: View {
       onSelect: { selected in
         guard let profile = store.profiles[id: selected.id] else { return }
         store.send(.profileTapped(profile))
+      },
+      onManageCapabilities: { selected in
+        guard let profile = store.profiles[id: selected.id] else { return }
+        store.send(.manageCapabilitiesTapped(profile))
       }
     )
     .navigationDestination(
       item: $store.scope(state: \.profileEditor, action: \.profileEditor)
     ) { editorStore in
       ProfileEditorView(store: editorStore)
+    }
+    .navigationDestination(
+      item: $store.scope(state: \.capabilityManagement, action: \.capabilityManagement)
+    ) { capabilityStore in
+      CapabilityManagementView(store: capabilityStore)
     }
     .sheet(item: $store.scope(state: \.addProfile, action: \.addProfile)) { addProfileStore in
       NavigationStack {
