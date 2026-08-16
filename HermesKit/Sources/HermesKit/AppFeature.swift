@@ -43,6 +43,7 @@ public struct AppFeature {
           dashboard = nil
           settings = nil
           automations = nil
+          kanban = nil
           selectedDestination = .home
         }
       }
@@ -55,8 +56,12 @@ public struct AppFeature {
     /// profile selection. A server without cron keeps the tab available and shows an
     /// in-feature unsupported state instead of disabling navigation.
     public var automations: AutomationsFeature.State?
-    /// Board has no reducer/action surface until its server contract is verified. Availability
-    /// lets the shell explain that boundary without issuing an RPC.
+    /// Board destination. Created lazily when selected and cleared when leaving the tab so
+    /// polling/refresh only runs while visible. A server without the native Kanban plugin
+    /// keeps the tab available and shows an in-feature unsupported state.
+    public var kanban: KanbanFeature.State?
+    /// Board capability gate for Home quick actions; once a Kanban board loads, the tab is
+    /// available. The Board feature itself also capability-gates a missing plugin.
     public var boardAvailability: AppDestinationAvailability
     /// Automations is implemented and its tab is always available; the feature itself
     /// capability-gates servers without cron support.
@@ -135,6 +140,7 @@ public struct AppFeature {
       home: SessionListFeature.State? = nil,
       settings: SettingsFeature.State? = nil,
       automations: AutomationsFeature.State? = nil,
+      kanban: KanbanFeature.State? = nil,
       boardAvailability: AppDestinationAvailability = .unavailable(
         reason: "Board requires a verified Kanban server module."
       ),
@@ -152,6 +158,7 @@ public struct AppFeature {
       self.home = home
       self.settings = settings
       self.automations = automations
+      self.kanban = kanban
       self.boardAvailability = boardAvailability
       self.automationsAvailability = automationsAvailability
       self.path = path
@@ -249,6 +256,7 @@ public struct AppFeature {
     case home(SessionListFeature.Action)
     case settings(SettingsFeature.Action)
     case automations(AutomationsFeature.Action)
+    case kanban(KanbanFeature.Action)
     /// Clear the lazily-created root Settings child on a follow-up action, after a delegate
     /// action has had a chance to reduce through the child.
     case clearSettings
@@ -363,6 +371,10 @@ public struct AppFeature {
           // so its poll cannot run off-tab and the next visit captures the current profile.
           state.automations = nil
         }
+        if state.selectedDestination == .board {
+          // Board polling/refresh also runs only while visible; drop the child on the way out.
+          state.kanban = nil
+        }
         state.selectedDestination = destination
         if destination == .settings {
           state.settings = makeSettingsState(
@@ -375,6 +387,10 @@ public struct AppFeature {
             connection: chats.connection,
             profileName: chats.scopedProfileName
           )
+        }
+        if destination == .board {
+          state.boardAvailability = .available
+          state.kanban = KanbanFeature.State(connection: chats.connection)
         }
 
         guard wasShowingChat else { return .none }
@@ -444,6 +460,7 @@ public struct AppFeature {
         state.home = nil
         state.settings = nil
         state.automations = nil
+        state.kanban = nil
         state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
@@ -732,6 +749,7 @@ public struct AppFeature {
         state.selectedDestination = .chats
         state.settings = nil
         state.automations = nil
+        state.kanban = nil
         // Approval-recovery hint (#30 workaround): a badged session (approval push tapped or
         // received) may have missed the real `approval.request` while detached — read the flag
         // BEFORE clearing the badge entry so the hydrating chat can synthesize a generic card
@@ -860,6 +878,7 @@ public struct AppFeature {
         state.home = nil
         state.settings = nil
         state.automations = nil
+        state.kanban = nil
         state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
@@ -919,6 +938,7 @@ public struct AppFeature {
         state.home = nil
         state.settings = nil
         state.automations = nil
+        state.kanban = nil
         state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
@@ -985,8 +1005,8 @@ public struct AppFeature {
         else { return glow }
         return .concatenate(glow, teardownSlot())
 
-      case .onboarding, .connectionFailed, .dashboard, .home, .settings, .automations, .path,
-           .reauth, .liveChat:
+      case .onboarding, .connectionFailed, .dashboard, .home, .settings, .automations, .kanban,
+           .path, .reauth, .liveChat:
         return .none
       }
     }
@@ -1004,6 +1024,9 @@ public struct AppFeature {
     }
     .ifLet(\.automations, action: \.automations) {
       AutomationsFeature()
+    }
+    .ifLet(\.kanban, action: \.kanban) {
+      KanbanFeature()
     }
     .ifLet(\.$reauth, action: \.reauth) {
       ReauthFeature()
@@ -1080,6 +1103,7 @@ public struct AppFeature {
     state.home = makeHomeState(connection: connection)
     state.settings = nil
     state.automations = nil
+    state.kanban = nil
   }
 
   /// Build the root Settings destination from the latest Chats capability state and persisted
@@ -1196,6 +1220,7 @@ public struct AppFeature {
     state.selectedDestination = .chats
     state.settings = nil
     state.automations = nil
+    state.kanban = nil
     state.liveChat = chat
     state.path.removeAll()
     state.path.append(ChatScreen.State(sessionKey: chat.sessionKey))
