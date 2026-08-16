@@ -4,6 +4,30 @@ Implementation and Apple-platform validation are intentionally separated while t
 environment is being prepared. Tests and protocol fixtures are authored with each feature,
 but unexecuted checks must never be reported as passing.
 
+## Implementation status — 2026-08-16
+
+- [x] Phase 0 — Repository foundation ([PR #1](https://github.com/jbenzaquen42/hermes-mobile/pull/1))
+- [x] Phase 1 — True steering ([PR #2](https://github.com/jbenzaquen42/hermes-mobile/pull/2))
+- [x] Phase 2 — Application shell and Home ([PR #3](https://github.com/jbenzaquen42/hermes-mobile/pull/3))
+- [x] Phase 3 — Profile administration ([PR #4](https://github.com/jbenzaquen42/hermes-mobile/pull/4))
+- [x] Phase 4 — Skills, toolsets, and MCP ([PR #5](https://github.com/jbenzaquen42/hermes-mobile/pull/5))
+- [x] Phase 5 — Memory and USER profile ([PR #6](https://github.com/jbenzaquen42/hermes-mobile/pull/6))
+- [ ] Phase 6 — Automations
+- [ ] Phase 7 — Kanban
+- [ ] Phase 8 — Notifications and polish
+- [ ] Validation Phase 1 — Mac and iPhone baseline
+- [ ] Validation Phase 2 — Feature and regression validation
+- [ ] Validation Phase 3 — Daily-driver acceptance
+
+Checked implementation phases have merged source, authored unit/contract/snapshot tests, and
+a phase-specific validation ledger. They have not yet been compiled or executed with the
+Apple toolchain. Phase 5 is intentionally server-default-profile-only because current
+`learning.*` RPCs do not accept a profile parameter; custom-profile memory is shown as
+unsupported rather than accessing the wrong store.
+
+The Phase 6 validation ledger exists, but no Phase 6 implementation commit was created before
+handoff.
+
 ## Phase 0 — Repository foundation
 
 - Fork and clone Hermes Mobile with explicit `origin` and `upstream` remotes.

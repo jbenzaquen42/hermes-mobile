@@ -174,6 +174,17 @@ To run on a physical device, see [`docs/development.md`](docs/development.md).
 
 ## Status
 
+### Hermes Control fork
+
+Implementation Phases 0–5 are merged in the owner's fork: repository/signing foundation,
+true steering, the five-destination shell and Home dashboard, profile/SOUL administration,
+skills/toolsets/MCP management, and structured USER/agent memory management. Phases 6–8
+(Automations, Kanban, notifications/polish) remain pending. Swift tests, Tuist generation,
+simulator/device builds, signing, and live-server validation remain deferred until the Mac
+environment is available. See [`docs/plans/20260814-hermes-control-roadmap.md`](docs/plans/20260814-hermes-control-roadmap.md).
+
+### Upstream baseline
+
 The MVP is feature-complete and shipping to TestFlight — the full loop (connect,
 browse/search/resume/create, stream, approve/clarify) is built and covered by unit and
 SwiftUI snapshot tests. It's a personal tool first, designed to run over a private
