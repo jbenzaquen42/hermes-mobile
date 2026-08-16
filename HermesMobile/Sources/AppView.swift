@@ -70,12 +70,17 @@ struct AppView: View {
 
       Tab("Board", systemImage: "rectangle.3.group", value: AppDestination.board) {
         NavigationStack {
-          UnsupportedDestinationView(
-            title: "Board",
-            systemImage: "rectangle.3.group",
-            reason: store.boardAvailability.unavailableReason
-              ?? "Board is available, but its workspace isn't included in this build yet."
-          )
+          if let kanbanStore = store.scope(state: \.kanban, action: \.kanban) {
+            KanbanView(store: kanbanStore)
+          } else if let reason = store.boardAvailability.unavailableReason {
+            UnsupportedDestinationView(
+              title: "Board",
+              systemImage: "rectangle.3.group",
+              reason: reason
+            )
+          } else {
+            ProgressView("Loading Board…")
+          }
         }
       }
 

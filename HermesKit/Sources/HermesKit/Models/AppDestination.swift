@@ -15,9 +15,9 @@ public enum AppDestination: String, CaseIterable, Equatable, Hashable, Sendable 
 
 /// Whether a shell destination is backed by a verified server capability.
 ///
-/// Board and Automations intentionally start unavailable. Their tabs remain useful as
-/// isolated roadmap placeholders, while the absence of a reducer/action surface guarantees
-/// that selecting one cannot issue an unsupported RPC or disturb chat.
+/// Automations and Board are implemented as first-class tabs. Board availability is
+/// initially off until a Kanban board is known to exist; the in-feature unsupported state
+/// keeps the tab navigable even when the server lacks the plugin.
 public enum AppDestinationAvailability: Equatable, Sendable {
   case available
   case unavailable(reason: String)

@@ -936,5 +936,60 @@ struct HermesRESTClientTests {
     #expect(req.url?.path == "/api/cron/jobs/abc")
     #expect(req.url?.query == "profile=work")
   }
+  // MARK: Kanban
+
+  @Test func kanbanBoardGetsBoardWithOptionalSlug() async throws {
+    MockURLProtocol.set(json: #"{"columns":[],"tenants":[],"assignees":[],"latest_event_id":0,"now":1700000000}"#)
+    _ = try await makeClient().kanbanBoard(connection, nil)
+    #expect(MockURLProtocol.lastRequest?.url?.path == "/api/plugins/kanban/board")
+    #expect(MockURLProtocol.lastRequest?.url?.query == nil)
+
+    MockURLProtocol.set(json: #"{"columns":[],"tenants":[],"assignees":[],"latest_event_id":0,"now":1700000000}"#)
+    _ = try await makeClient().kanbanBoard(connection, "ops")
+    #expect(MockURLProtocol.lastRequest?.url?.query == "board=ops")
+  }
+
+  @Test func kanbanTaskDetailGetsTaskWithBoard() async throws {
+    MockURLProtocol.set(json: #"{"task":{"id":"t1","title":"Task","status":"todo"},"comments":[],"runs":[]}"#)
+    let detail = try await makeClient().kanbanTaskDetail(connection, "t1", "ops")
+    #expect(detail.task.id == "t1")
+    #expect(MockURLProtocol.lastRequest?.url?.path == "/api/plugins/kanban/tasks/t1")
+    #expect(MockURLProtocol.lastRequest?.url?.query == "board=ops")
+  }
+
+  @Test func kanbanCreateTaskPostsVerifiedBody() async throws {
+    MockURLProtocol.set(json: #"{"task":{"id":"new","title":"Task","status":"todo"}}"#)
+    let draft = KanbanTaskDraft(title: "Task", body: "Body", assignee: "dev", priority: 2)
+    try await makeClient().kanbanCreateTask(connection, draft, nil)
+    let req = try #require(MockURLProtocol.lastRequest)
+    #expect(req.httpMethod == "POST")
+    #expect(req.url?.path == "/api/plugins/kanban/tasks")
+    let json = try JSONSerialization.jsonObject(with: bodyData(req)) as? [String: Any]
+    #expect(json?["title"] as? String == "Task")
+    #expect(json?["body"] as? String == "Body")
+    #expect(json?["assignee"] as? String == "dev")
+    #expect(json?["priority"] as? Int == 2)
+  }
+
+  @Test func kanbanUpdateTaskPatchesStatusAndFields() async throws {
+    MockURLProtocol.set(json: #"{"task":{"id":"t1","title":"Task","status":"ready"}}"#)
+    let draft = KanbanTaskDraft(title: "Task", body: "", assignee: nil, priority: 1, status: "ready")
+    try await makeClient().kanbanUpdateTask(connection, "t1", draft, "ops")
+    let req = try #require(MockURLProtocol.lastRequest)
+    #expect(req.httpMethod == "PATCH")
+    #expect(req.url?.path == "/api/plugins/kanban/tasks/t1")
+    #expect(req.url?.query == "board=ops")
+    let json = try JSONSerialization.jsonObject(with: bodyData(req)) as? [String: Any]
+    #expect(json?["status"] as? String == "ready")
+    #expect(json?["title"] as? String == "Task")
+  }
+
+  @Test func kanbanDeleteTaskDeletes() async throws {
+    MockURLProtocol.set(json: #"{"deleted":true}"#)
+    try await makeClient().kanbanDeleteTask(connection, "t1", nil)
+    let req = try #require(MockURLProtocol.lastRequest)
+    #expect(req.httpMethod == "DELETE")
+    #expect(req.url?.path == "/api/plugins/kanban/tasks/t1")
+  }
 }
 } // extension RESTTransportSuite

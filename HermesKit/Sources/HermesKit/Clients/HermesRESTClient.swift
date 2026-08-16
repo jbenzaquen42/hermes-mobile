@@ -186,6 +186,17 @@ public struct HermesRESTClient: Sendable {
   public var updateCronJob: @Sendable (_ connection: ServerConnection, _ id: String, _ draft: CronJobDraft, _ profile: String?) async throws -> Void
   /// Delete a cron job — `DELETE /api/cron/jobs/{id}`.
   public var deleteCronJob: @Sendable (_ connection: ServerConnection, _ id: String, _ profile: String?) async throws -> Void
+  /// Kanban board — `GET /api/plugins/kanban/board`. A missing plugin surfaces as
+  /// `RESTError.notFound` so callers can capability-gate.
+  public var kanbanBoard: @Sendable (_ connection: ServerConnection, _ board: String?) async throws -> KanbanBoard
+  /// Kanban task detail — `GET /api/plugins/kanban/tasks/{id}`.
+  public var kanbanTaskDetail: @Sendable (_ connection: ServerConnection, _ id: String, _ board: String?) async throws -> KanbanTaskDetail
+  /// Create a Kanban task — `POST /api/plugins/kanban/tasks`.
+  public var kanbanCreateTask: @Sendable (_ connection: ServerConnection, _ draft: KanbanTaskDraft, _ board: String?) async throws -> Void
+  /// Update a Kanban task — `PATCH /api/plugins/kanban/tasks/{id}`.
+  public var kanbanUpdateTask: @Sendable (_ connection: ServerConnection, _ id: String, _ draft: KanbanTaskDraft, _ board: String?) async throws -> Void
+  /// Delete a Kanban task — `DELETE /api/plugins/kanban/tasks/{id}`.
+  public var kanbanDeleteTask: @Sendable (_ connection: ServerConnection, _ id: String, _ board: String?) async throws -> Void
   /// Authoritative readiness probe for the `hermes-push` plugin — `GET /api/dashboard/plugins/hub`
   /// → `{plugins: [{name, runtime_status, …}], …}`. Matches the plugin by `name == "hermes-push"`
   /// and maps: `runtime_status == "enabled"` → `.ready`; present-but-not-enabled or absent →
@@ -375,6 +386,33 @@ public extension HermesRESTClient {
         let url = try makeURL(conn.baseURL, "/api/cron/jobs/\(id)", query: query)
         try await send(url, method: "DELETE", body: nil, token: conn.token, session: session)
       },
+      kanbanBoard: { conn, board in
+        let query = kanbanBoardQuery(board)
+        let url = try makeURL(conn.baseURL, "/api/plugins/kanban/board", query: query)
+        return try await get(url, token: conn.token, session: session)
+      },
+      kanbanTaskDetail: { conn, id, board in
+        let query = kanbanBoardQuery(board)
+        let url = try makeURL(conn.baseURL, "/api/plugins/kanban/tasks/\(id)", query: query)
+        return try await get(url, token: conn.token, session: session)
+      },
+      kanbanCreateTask: { conn, draft, board in
+        let query = kanbanBoardQuery(board)
+        let url = try makeURL(conn.baseURL, "/api/plugins/kanban/tasks", query: query)
+        let body = try JSONSerialization.data(withJSONObject: draft.createPayload)
+        try await send(url, method: "POST", body: body, token: conn.token, session: session)
+      },
+      kanbanUpdateTask: { conn, id, draft, board in
+        let query = kanbanBoardQuery(board)
+        let url = try makeURL(conn.baseURL, "/api/plugins/kanban/tasks/\(id)", query: query)
+        let body = try JSONSerialization.data(withJSONObject: draft.updatePayload)
+        try await send(url, method: "PATCH", body: body, token: conn.token, session: session)
+      },
+      kanbanDeleteTask: { conn, id, board in
+        let query = kanbanBoardQuery(board)
+        let url = try makeURL(conn.baseURL, "/api/plugins/kanban/tasks/\(id)", query: query)
+        try await send(url, method: "DELETE", body: nil, token: conn.token, session: session)
+      },
       pushPluginStatus: { conn in
         await fetchPushPluginInfo(conn, session: session).status
       },
@@ -414,6 +452,12 @@ public extension DependencyValues {
     get { self[HermesRESTClient.self] }
     set { self[HermesRESTClient.self] = newValue }
   }
+}
+
+/// Query items for the Kanban plugin's optional `?board=` scoping. Omits the param when
+/// `nil` so the server uses its active/current board.
+private func kanbanBoardQuery(_ board: String?) -> [URLQueryItem] {
+  board.map { [URLQueryItem(name: "board", value: $0)] } ?? []
 }
 
 /// Shared POST for the cron job actions (`trigger` / `pause` / `resume`) — same

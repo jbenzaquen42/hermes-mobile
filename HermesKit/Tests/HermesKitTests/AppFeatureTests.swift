@@ -3343,6 +3343,7 @@ struct AppFeatureTests {
     }
     await store.receive(\.destinationSelected) {
       $0.selectedDestination = .board
+      $0.kanban = KanbanFeature.State(connection: self.connection)
     }
     #expect(store.state.liveChat == nil)
 
