@@ -12,7 +12,7 @@ but unexecuted checks must never be reported as passing.
 - [x] Phase 3 — Profile administration ([PR #4](https://github.com/jbenzaquen42/hermes-mobile/pull/4))
 - [x] Phase 4 — Skills, toolsets, and MCP ([PR #5](https://github.com/jbenzaquen42/hermes-mobile/pull/5))
 - [x] Phase 5 — Memory and USER profile ([PR #6](https://github.com/jbenzaquen42/hermes-mobile/pull/6))
-- [ ] Phase 6 — Automations
+- [x] Phase 6 — Automations ([PR #8](https://github.com/jbenzaquen42/hermes-mobile/pull/8))
 - [ ] Phase 7 — Kanban
 - [ ] Phase 8 — Notifications and polish
 - [ ] Validation Phase 1 — Mac and iPhone baseline
@@ -24,9 +24,6 @@ a phase-specific validation ledger. They have not yet been compiled or executed 
 Apple toolchain. Phase 5 is intentionally server-default-profile-only because current
 `learning.*` RPCs do not accept a profile parameter; custom-profile memory is shown as
 unsupported rather than accessing the wrong store.
-
-The Phase 6 validation ledger exists, but no Phase 6 implementation commit was created before
-handoff.
 
 ## Phase 0 — Repository foundation
 
