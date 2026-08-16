@@ -140,4 +140,106 @@ struct CronJobTests {
     let now = Date(timeIntervalSince1970: 1_000_000)
     #expect(CronJob.relativeRunLabel(for: now, now: now) == "in 1 sec.")
   }
+
+  // MARK: Rich field decoding (Phase 6 contract)
+
+  @Test func decodesRichListPayload() throws {
+    let job = try decode(
+      """
+      {
+        "id": "a1b2c3d4e5f6",
+        "name": "Morning digest",
+        "prompt": "Summarize my inbox",
+        "schedule": {"display": "every day at 09:00", "expr": "0 9 * * *", "kind": "cron"},
+        "schedule_display": "every day at 09:00",
+        "enabled": true,
+        "state": "scheduled",
+        "next_run_at": "2026-07-02T09:00:00+00:00",
+        "last_run_at": "2026-07-01T09:00:00+00:00",
+        "last_status": "success",
+        "last_error": null,
+        "last_delivery_error": null,
+        "deliver": "local",
+        "model": "claude-sonnet-4-5",
+        "provider": "anthropic",
+        "base_url": "https://example.test/v1",
+        "skills": ["research", "summarize"],
+        "repeat": {"times": 5, "completed": 2},
+        "no_agent": false,
+        "script": null,
+        "context_from": ["abc123"],
+        "enabled_toolsets": ["shell"],
+        "workdir": "/tmp/jobs",
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "profile": "default",
+        "profile_name": "default",
+        "is_default_profile": true
+      }
+      """
+    )
+
+    #expect(job.scheduleExpression == "0 9 * * *")
+    #expect(job.scheduleKind == "cron")
+    #expect(job.deliver == "local")
+    #expect(job.model == "claude-sonnet-4-5")
+    #expect(job.provider == "anthropic")
+    #expect(job.baseURL == "https://example.test/v1")
+    #expect(job.skills == ["research", "summarize"])
+    #expect(job.repeatTimes == 5)
+    #expect(job.repeatCompleted == 2)
+    #expect(job.contextFrom == ["abc123"])
+    #expect(job.enabledToolsets == ["shell"])
+    #expect(job.workdir == "/tmp/jobs")
+    #expect(job.effectiveProfile == "default")
+    #expect(job.isDefaultProfile == true)
+    #expect(job.repeatLabel == "2/5")
+  }
+
+  @Test func decodesLegacyIntegerRepeatAndStringSkills() throws {
+    let job = try decode(
+      """
+      {
+        "id": "abc123",
+        "repeat": 3,
+        "skills": "research, summarize",
+        "context_from": "abc123"
+      }
+      """
+    )
+
+    #expect(job.repeatTimes == 3)
+    #expect(job.repeatCompleted == nil)
+    #expect(job.skills == ["research", "summarize"])
+    #expect(job.contextFrom == ["abc123"])
+  }
+
+  @Test func draftBuildsOnlyVerifiedWritableFields() {
+    let draft = CronJobDraft(
+      name: "Digest",
+      prompt: "Summarize",
+      schedule: "0 9 * * *",
+      deliver: "telegram",
+      model: "model-x",
+      provider: "provider-y",
+      skills: ["a", "b"]
+    )
+
+    let create = draft.createPayload
+    #expect(create["name"] as? String == "Digest")
+    #expect(create["prompt"] as? String == "Summarize")
+    #expect(create["schedule"] as? String == "0 9 * * *")
+    #expect(create["deliver"] as? String == "telegram")
+    #expect(create["model"] as? String == "model-x")
+    #expect(create["provider"] as? String == "provider-y")
+    #expect(create["skills"] as? [String] == ["a", "b"])
+    #expect(create["repeat"] == nil)
+
+    let update = draft.updatePayload
+    let updates = update["updates"] as? [String: Any]
+    #expect(updates?["name"] as? String == "Digest")
+    #expect(updates?["schedule"] as? String == "0 9 * * *")
+    #expect(updates?["model"] as? String == "model-x")
+    #expect(updates?["provider"] as? String == "provider-y")
+    #expect(updates?["skills"] as? [String] == ["a", "b"])
+  }
 }

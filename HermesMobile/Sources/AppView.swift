@@ -81,12 +81,11 @@ struct AppView: View {
 
       Tab("Automations", systemImage: "calendar", value: AppDestination.automations) {
         NavigationStack {
-          UnsupportedDestinationView(
-            title: "Automations",
-            systemImage: "calendar",
-            reason: store.automationsAvailability.unavailableReason
-              ?? "Automations are available, but their editor isn't included in this build yet."
-          )
+          if let automationsStore = store.scope(state: \.automations, action: \.automations) {
+            AutomationsView(store: automationsStore)
+          } else {
+            ProgressView("Loading Automations…")
+          }
         }
       }
 
