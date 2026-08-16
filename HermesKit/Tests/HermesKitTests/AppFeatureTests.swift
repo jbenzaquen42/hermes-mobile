@@ -3200,9 +3200,9 @@ struct AppFeatureTests {
     #expect(state.availability(for: .chats).isAvailable)
     #expect(state.availability(for: .settings).isAvailable)
     #expect(!state.availability(for: .board).isAvailable)
-    #expect(!state.availability(for: .automations).isAvailable)
+    #expect(state.availability(for: .automations).isAvailable)
     #expect(state.boardAvailability.unavailableReason != nil)
-    #expect(state.automationsAvailability.unavailableReason != nil)
+    #expect(state.automationsAvailability.unavailableReason == nil)
   }
 
   @Test func selectingSettingsCreatesAndThenReleasesItsChild() async {
@@ -3351,6 +3351,7 @@ struct AppFeatureTests {
     }
     await store.receive(\.destinationSelected) {
       $0.selectedDestination = .automations
+      $0.automations = AutomationsFeature.State(connection: self.connection, profileName: nil)
     }
     #expect(store.state.liveChat == nil)
   }

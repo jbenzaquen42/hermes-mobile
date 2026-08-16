@@ -171,6 +171,21 @@ public struct HermesRESTClient: Sendable {
   public var pauseCronJob: @Sendable (_ connection: ServerConnection, _ id: String, _ profile: String?) async throws -> Void
   /// Resume a paused cron job — `POST /api/cron/jobs/{id}/resume`. `profile` as above.
   public var resumeCronJob: @Sendable (_ connection: ServerConnection, _ id: String, _ profile: String?) async throws -> Void
+  /// One cron job — `GET /api/cron/jobs/{id}`. `profile` as above; `nil` lets the server
+  /// locate the owning profile.
+  public var cronJobDetail: @Sendable (_ connection: ServerConnection, _ id: String, _ profile: String?) async throws -> CronJob
+  /// Run sessions for a cron job — `GET /api/cron/jobs/{id}/runs?limit=`. Rows use the
+  /// same shape as `/api/sessions`, so they map to `Session` directly.
+  public var cronJobRuns: @Sendable (_ connection: ServerConnection, _ id: String, _ profile: String?, _ limit: Int) async throws -> [Session]
+  /// Delivery targets for cron output — `GET /api/cron/delivery-targets`.
+  public var cronDeliveryTargets: @Sendable (_ connection: ServerConnection) async throws -> [CronDeliveryTarget]
+  /// Create a cron job — `POST /api/cron/jobs` with the verified writable fields.
+  public var createCronJob: @Sendable (_ connection: ServerConnection, _ draft: CronJobDraft, _ profile: String?) async throws -> Void
+  /// Update a cron job — `PUT /api/cron/jobs/{id}` with a server-authoritative reload
+  /// after success.
+  public var updateCronJob: @Sendable (_ connection: ServerConnection, _ id: String, _ draft: CronJobDraft, _ profile: String?) async throws -> Void
+  /// Delete a cron job — `DELETE /api/cron/jobs/{id}`.
+  public var deleteCronJob: @Sendable (_ connection: ServerConnection, _ id: String, _ profile: String?) async throws -> Void
   /// Authoritative readiness probe for the `hermes-push` plugin — `GET /api/dashboard/plugins/hub`
   /// → `{plugins: [{name, runtime_status, …}], …}`. Matches the plugin by `name == "hermes-push"`
   /// and maps: `runtime_status == "enabled"` → `.ready`; present-but-not-enabled or absent →
@@ -325,6 +340,40 @@ public extension HermesRESTClient {
       },
       resumeCronJob: { conn, id, profile in
         try await cronJobAction(conn, id: id, action: "resume", profile: profile, session: session)
+      },
+      cronJobDetail: { conn, id, profile in
+        let query = profile.map { [URLQueryItem(name: "profile", value: $0)] } ?? []
+        let url = try makeURL(conn.baseURL, "/api/cron/jobs/\(id)", query: query)
+        return try await get(url, token: conn.token, session: session)
+      },
+      cronJobRuns: { conn, id, profile, limit in
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let profile { query.append(URLQueryItem(name: "profile", value: profile)) }
+        let url = try makeURL(conn.baseURL, "/api/cron/jobs/\(id)/runs", query: query)
+        let response: CronJobRunsResponse = try await get(url, token: conn.token, session: session)
+        return response.runs.map(\.asSession)
+      },
+      cronDeliveryTargets: { conn in
+        let url = try makeURL(conn.baseURL, "/api/cron/delivery-targets")
+        let response: CronDeliveryTargetsResponse = try await get(url, token: conn.token, session: session)
+        return response.targets
+      },
+      createCronJob: { conn, draft, profile in
+        let query = profile.map { [URLQueryItem(name: "profile", value: $0)] } ?? []
+        let url = try makeURL(conn.baseURL, "/api/cron/jobs", query: query)
+        let body = try JSONSerialization.data(withJSONObject: draft.createPayload)
+        try await send(url, method: "POST", body: body, token: conn.token, session: session)
+      },
+      updateCronJob: { conn, id, draft, profile in
+        let query = profile.map { [URLQueryItem(name: "profile", value: $0)] } ?? []
+        let url = try makeURL(conn.baseURL, "/api/cron/jobs/\(id)", query: query)
+        let body = try JSONSerialization.data(withJSONObject: draft.updatePayload)
+        try await send(url, method: "PUT", body: body, token: conn.token, session: session)
+      },
+      deleteCronJob: { conn, id, profile in
+        let query = profile.map { [URLQueryItem(name: "profile", value: $0)] } ?? []
+        let url = try makeURL(conn.baseURL, "/api/cron/jobs/\(id)", query: query)
+        try await send(url, method: "DELETE", body: nil, token: conn.token, session: session)
       },
       pushPluginStatus: { conn in
         await fetchPushPluginInfo(conn, session: session).status
@@ -551,6 +600,17 @@ func send(
 private struct SessionsResponse: Decodable {
   let sessions: [SessionListDTO]
   let total: Int?
+}
+
+/// `GET /api/cron/jobs/{id}/runs` — rows are shaped exactly like `/api/sessions`.
+private struct CronJobRunsResponse: Decodable {
+  let runs: [SessionListDTO]
+  let limit: Int?
+}
+
+/// `GET /api/cron/delivery-targets` — `{targets: [...]}`.
+private struct CronDeliveryTargetsResponse: Decodable {
+  let targets: [CronDeliveryTarget]
 }
 
 /// `GET /api/auth/providers`. The server wraps the list in an object

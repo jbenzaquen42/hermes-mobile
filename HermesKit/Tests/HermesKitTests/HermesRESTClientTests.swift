@@ -852,5 +852,89 @@ struct HermesRESTClientTests {
       try await makeClient().triggerCronJob(connection, "gone", nil)
     }
   }
+
+  @Test func cronJobDetailGetsJobWithProfile() async throws {
+    MockURLProtocol.set(json: #"{"id":"abc","name":"Detail","state":"paused"}"#)
+    let job = try await makeClient().cronJobDetail(connection, "abc", "work")
+    #expect(job.id == "abc")
+    #expect(job.name == "Detail")
+    #expect(MockURLProtocol.lastRequest?.httpMethod == "GET")
+    #expect(MockURLProtocol.lastRequest?.url?.path == "/api/cron/jobs/abc")
+    #expect(MockURLProtocol.lastRequest?.url?.query == "profile=work")
+  }
+
+  @Test func cronJobRunsDecodesSessionRowsAndThreadsProfile() async throws {
+    MockURLProtocol.set(json: #"""
+    {"runs":[{"id":"cron_abc_20260702_090000","title":"Morning digest","last_active":1749556800.0,"source":"cron","profile":"work"}],"limit":20}
+    """#)
+    let runs = try await makeClient().cronJobRuns(connection, "abc", "work", 20)
+    #expect(runs.count == 1)
+    #expect(runs.first?.id == "cron_abc_20260702_090000")
+    #expect(runs.first?.isCron == true)
+    #expect(MockURLProtocol.lastRequest?.url?.path == "/api/cron/jobs/abc/runs")
+    let query = URLComponents(url: MockURLProtocol.lastRequest!.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    #expect(query.contains(URLQueryItem(name: "limit", value: "20")))
+    #expect(query.contains(URLQueryItem(name: "profile", value: "work")))
+  }
+
+  @Test func cronDeliveryTargetsDecodes() async throws {
+    MockURLProtocol.set(json: #"""
+    {"targets":[{"id":"local","name":"Local (save only)","home_target_set":true,"home_env_var":null},{"id":"telegram","name":"Telegram","home_target_set":false,"home_env_var":"TELEGRAM_CRON_CHAT"}]}
+    """#)
+    let targets = try await makeClient().cronDeliveryTargets(connection)
+    #expect(targets.count == 2)
+    #expect(targets.first?.id == "local")
+    #expect(targets.last?.homeEnvVar == "TELEGRAM_CRON_CHAT")
+    #expect(MockURLProtocol.lastRequest?.url?.path == "/api/cron/delivery-targets")
+  }
+
+  @Test func createCronJobPostsVerifiedBodyAndProfile() async throws {
+    MockURLProtocol.set(status: 200, json: #"{"id":"new"}"#)
+    let draft = CronJobDraft(
+      name: "Digest", prompt: "Summarize", schedule: "0 9 * * *",
+      deliver: "local", model: "m", provider: "p", skills: ["a"]
+    )
+    try await makeClient().createCronJob(connection, draft, "work")
+    let req = try #require(MockURLProtocol.lastRequest)
+    #expect(req.httpMethod == "POST")
+    #expect(req.url?.path == "/api/cron/jobs")
+    #expect(req.url?.query == "profile=work")
+    let json = try JSONSerialization.jsonObject(with: bodyData(req)) as? [String: Any]
+    #expect(json?["name"] as? String == "Digest")
+    #expect(json?["schedule"] as? String == "0 9 * * *")
+    #expect(json?["model"] as? String == "m")
+    #expect(json?["provider"] as? String == "p")
+    #expect(json?["skills"] as? [String] == ["a"])
+  }
+
+  @Test func updateCronJobPutsWrappedUpdatesWithProfile() async throws {
+    MockURLProtocol.set(status: 200, json: #"{"id":"abc"}"#)
+    let draft = CronJobDraft(
+      name: "Renamed", prompt: "New prompt", schedule: "0 10 * * *",
+      deliver: "telegram", model: nil, provider: nil, skills: []
+    )
+    try await makeClient().updateCronJob(connection, "abc", draft, nil)
+    let req = try #require(MockURLProtocol.lastRequest)
+    #expect(req.httpMethod == "PUT")
+    #expect(req.url?.path == "/api/cron/jobs/abc")
+    #expect(req.url?.query == nil)
+    let json = try JSONSerialization.jsonObject(with: bodyData(req)) as? [String: Any]
+    let updates = json?["updates"] as? [String: Any]
+    #expect(updates?["name"] as? String == "Renamed")
+    #expect(updates?["prompt"] as? String == "New prompt")
+    #expect(updates?["schedule"] as? String == "0 10 * * *")
+    #expect(updates?["deliver"] as? String == "telegram")
+    #expect(updates?["model"] is NSNull)
+    #expect(updates?["provider"] is NSNull)
+  }
+
+  @Test func deleteCronJobDeletesWithProfile() async throws {
+    MockURLProtocol.set(status: 200, json: #"{"ok":true}"#)
+    try await makeClient().deleteCronJob(connection, "abc", "work")
+    let req = try #require(MockURLProtocol.lastRequest)
+    #expect(req.httpMethod == "DELETE")
+    #expect(req.url?.path == "/api/cron/jobs/abc")
+    #expect(req.url?.query == "profile=work")
+  }
 }
 } // extension RESTTransportSuite

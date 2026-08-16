@@ -42,6 +42,7 @@ public struct AppFeature {
         } else {
           dashboard = nil
           settings = nil
+          automations = nil
           selectedDestination = .home
         }
       }
@@ -49,9 +50,16 @@ public struct AppFeature {
     /// Root Settings destination. Created lazily when selected and cleared when another tab is
     /// chosen, so its debug-log stream retains the old sheet's presentation lifetime.
     public var settings: SettingsFeature.State?
-    /// Board and Automations have no reducer/action surface until their server contracts are
-    /// verified. Availability lets the shell explain that boundary without issuing an RPC.
+    /// Automations destination. Created lazily when selected and cleared when leaving the
+    /// tab so its polling/refresh only runs while visible and it always captures the current
+    /// profile selection. A server without cron keeps the tab available and shows an
+    /// in-feature unsupported state instead of disabling navigation.
+    public var automations: AutomationsFeature.State?
+    /// Board has no reducer/action surface until its server contract is verified. Availability
+    /// lets the shell explain that boundary without issuing an RPC.
     public var boardAvailability: AppDestinationAvailability
+    /// Automations is implemented and its tab is always available; the feature itself
+    /// capability-gates servers without cron support.
     public var automationsAvailability: AppDestinationAvailability
     /// The navigation path holds only thin session-key markers (`ChatScreen.State`) — the
     /// real chat state lives in the `liveChat` slot below, so popping a marker never
@@ -126,12 +134,11 @@ public struct AppFeature {
       dashboard: HomeFeature.State? = nil,
       home: SessionListFeature.State? = nil,
       settings: SettingsFeature.State? = nil,
+      automations: AutomationsFeature.State? = nil,
       boardAvailability: AppDestinationAvailability = .unavailable(
         reason: "Board requires a verified Kanban server module."
       ),
-      automationsAvailability: AppDestinationAvailability = .unavailable(
-        reason: "Automation editing is not available on this server yet."
-      ),
+      automationsAvailability: AppDestinationAvailability = .available,
       path: StackState<ChatScreen.State> = .init(),
       liveChat: ChatFeature.State? = nil,
       autoConnecting: Bool = false,
@@ -144,6 +151,7 @@ public struct AppFeature {
       self.dashboard = dashboard ?? home.map { HomeFeature.State(connection: $0.connection) }
       self.home = home
       self.settings = settings
+      self.automations = automations
       self.boardAvailability = boardAvailability
       self.automationsAvailability = automationsAvailability
       self.path = path
@@ -240,6 +248,7 @@ public struct AppFeature {
     /// Historical name retained for source compatibility; this is the Chats child.
     case home(SessionListFeature.Action)
     case settings(SettingsFeature.Action)
+    case automations(AutomationsFeature.Action)
     /// Clear the lazily-created root Settings child on a follow-up action, after a delegate
     /// action has had a chance to reduce through the child.
     case clearSettings
@@ -349,11 +358,22 @@ public struct AppFeature {
           // dropping the child whenever its tab stops being visible.
           state.settings = nil
         }
+        if state.selectedDestination == .automations {
+          // Automations polls only while its tab is visible. Drop the child on the way out
+          // so its poll cannot run off-tab and the next visit captures the current profile.
+          state.automations = nil
+        }
         state.selectedDestination = destination
         if destination == .settings {
           state.settings = makeSettingsState(
             chats: chats,
             activeWorkflowProfileName: Self.activeWorkflowProfileName(state.liveChat)
+          )
+        }
+        if destination == .automations {
+          state.automations = AutomationsFeature.State(
+            connection: chats.connection,
+            profileName: chats.scopedProfileName
           )
         }
 
@@ -423,6 +443,7 @@ public struct AppFeature {
         state.dashboard = nil
         state.home = nil
         state.settings = nil
+        state.automations = nil
         state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
@@ -710,6 +731,7 @@ public struct AppFeature {
         guard let home = state.home else { return .none }
         state.selectedDestination = .chats
         state.settings = nil
+        state.automations = nil
         // Approval-recovery hint (#30 workaround): a badged session (approval push tapped or
         // received) may have missed the real `approval.request` while detached — read the flag
         // BEFORE clearing the badge entry so the hydrating chat can synthesize a generic card
@@ -837,6 +859,7 @@ public struct AppFeature {
         state.dashboard = nil
         state.home = nil
         state.settings = nil
+        state.automations = nil
         state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
@@ -895,6 +918,7 @@ public struct AppFeature {
         state.dashboard = nil
         state.home = nil
         state.settings = nil
+        state.automations = nil
         state.selectedDestination = .home
         state.onboarding = .init()
         state.pendingPushTap = nil
@@ -961,8 +985,8 @@ public struct AppFeature {
         else { return glow }
         return .concatenate(glow, teardownSlot())
 
-      case .onboarding, .connectionFailed, .dashboard, .home, .settings, .path, .reauth,
-           .liveChat:
+      case .onboarding, .connectionFailed, .dashboard, .home, .settings, .automations, .path,
+           .reauth, .liveChat:
         return .none
       }
     }
@@ -977,6 +1001,9 @@ public struct AppFeature {
     }
     .ifLet(\.settings, action: \.settings) {
       SettingsFeature()
+    }
+    .ifLet(\.automations, action: \.automations) {
+      AutomationsFeature()
     }
     .ifLet(\.$reauth, action: \.reauth) {
       ReauthFeature()
@@ -1052,6 +1079,7 @@ public struct AppFeature {
     state.dashboard = HomeFeature.State(connection: connection)
     state.home = makeHomeState(connection: connection)
     state.settings = nil
+    state.automations = nil
   }
 
   /// Build the root Settings destination from the latest Chats capability state and persisted
@@ -1167,6 +1195,7 @@ public struct AppFeature {
     // install prompt) converges here, so this is the one selection rule.
     state.selectedDestination = .chats
     state.settings = nil
+    state.automations = nil
     state.liveChat = chat
     state.path.removeAll()
     state.path.append(ChatScreen.State(sessionKey: chat.sessionKey))
