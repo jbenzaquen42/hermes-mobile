@@ -13,7 +13,7 @@ but unexecuted checks must never be reported as passing.
 - [x] Phase 4 — Skills, toolsets, and MCP ([PR #5](https://github.com/jbenzaquen42/hermes-mobile/pull/5))
 - [x] Phase 5 — Memory and USER profile ([PR #6](https://github.com/jbenzaquen42/hermes-mobile/pull/6))
 - [x] Phase 6 — Automations ([PR #8](https://github.com/jbenzaquen42/hermes-mobile/pull/8))
-- [ ] Phase 7 — Kanban
+- [x] Phase 7 — Kanban ([PR #10](https://github.com/jbenzaquen42/hermes-mobile/pull/10))
 - [ ] Phase 8 — Notifications and polish
 - [ ] Validation Phase 1 — Mac and iPhone baseline
 - [ ] Validation Phase 2 — Feature and regression validation
