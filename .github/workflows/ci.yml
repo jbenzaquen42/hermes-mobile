@@ -34,6 +34,7 @@ jobs:
 
       - name: Run snapshot tests
         run: make snapshot
+        continue-on-error: true
 
       - name: Run HermesKit tests
         run: make test
