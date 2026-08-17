@@ -133,9 +133,9 @@ struct MemoryManagementView: View {
     guard store.capacity == nil else { return nil }
     switch store.capacityReporting {
     case .notReportedByServer:
-      "This server does not report live character usage or configured limits."
+      return "This server does not report live character usage or configured limits."
     @unknown default:
-      "Capacity details are not available for this server response."
+      return "Capacity details are not available for this server response."
     }
   }
 
