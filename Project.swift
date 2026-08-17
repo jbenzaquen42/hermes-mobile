@@ -40,7 +40,7 @@ let project = Project(
         // default otherwise hardcodes CFBundleVersion = 1, ignoring the setting).
         "CFBundleShortVersionString": "$(MARKETING_VERSION)",
         "CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
-        "CFBundleDisplayName": displayName,
+        "CFBundleDisplayName": .string(displayName),
         "UILaunchScreen": ["UIColorName": ""],
         "HermesDefaultServerURL": .string(debugServerURL),
         // The app connects to user-specified self-hosted servers over http (Tailscale/LAN),
