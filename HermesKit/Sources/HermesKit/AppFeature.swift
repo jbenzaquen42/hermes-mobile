@@ -316,6 +316,17 @@ public struct AppFeature {
   public init() {}
 
   public var body: some ReducerOf<Self> {
+    core
+      .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
+        .send(.seedPendingInteractionsIfNeeded)
+      }
+      .onChange(of: \.isDashboardVisible) { _, isVisible in
+        isVisible ? .send(.seedPendingInteractionsIfNeeded) : .none
+      }
+  }
+
+  @ReducerBuilder<State, Action>
+  private var core: some ReducerOf<Self> {
     Scope(state: \.onboarding, action: \.onboarding) {
       ConnectionFeature()
     }
@@ -1058,17 +1069,6 @@ public struct AppFeature {
       Reduce { _, _ in
         .run { [push] _ in push.setCurrentSession(newValue) }
       }
-    }
-    // Hermes has no global pending-interaction read endpoint. While Home is visible, project
-    // the process-local approval knowledge AppFeature already owns into its card; the child
-    // action also cancels the unsupported network probe so a late response cannot erase it.
-    .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
-      .send(.seedPendingInteractionsIfNeeded)
-    }
-    // A badge may have arrived while another tab was selected. Seed the same process-local
-    // summaries when Home becomes visible rather than waiting for another set mutation.
-    .onChange(of: \.isDashboardVisible) { _, isVisible in
-      isVisible ? .send(.seedPendingInteractionsIfNeeded) : .none
     }
   }
 
