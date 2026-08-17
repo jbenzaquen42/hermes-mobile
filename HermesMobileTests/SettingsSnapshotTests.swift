@@ -194,7 +194,6 @@ final class SettingsSnapshotTests: SnapshotTestCase {
     }
     assertSnapshot(of: view, as: deviceImage())
   }
-}
 
   func testSettingsPushEventPreferences() {
     let initial = SettingsFeature.State(
@@ -219,3 +218,4 @@ final class SettingsSnapshotTests: SnapshotTestCase {
     }
     assertSnapshot(of: view, as: deviceImage())
   }
+}

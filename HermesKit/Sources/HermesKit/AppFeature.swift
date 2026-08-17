@@ -193,6 +193,12 @@ public struct AppFeature {
       }
     }
 
+    /// Whether the dashboard child is currently visible. A computed key path keeps the
+    /// `.onChange` type-checker happy without optional-chaining through a large state type.
+    public var isDashboardVisible: Bool {
+      dashboard?.isVisible ?? false
+    }
+
     /// Which root branch the app shell renders. The precedence is **logic, not layout**, so it
     /// lives here rather than in `AppView`: the connection-failed screen (#62) is reachable
     /// purely by sitting between the `autoConnecting` spinner and the onboarding fallback, and
@@ -286,6 +292,9 @@ public struct AppFeature {
     /// (`.teardownSocketOnly`), keeping the chat state in memory for the #26-preserving
     /// foreground re-hydrate.
     case backgroundGraceExpired
+    /// Internal: seed Home's pending-interaction card when process-local approval data or
+    /// dashboard visibility changes.
+    case seedPendingInteractionsIfNeeded
     case reauth(PresentationAction<ReauthFeature.Action>)
   }
 
@@ -307,6 +316,25 @@ public struct AppFeature {
   public init() {}
 
   public var body: some ReducerOf<Self> {
+    core
+      .forEach(\.path, action: \.path) {
+        ChatScreen()
+      }
+      .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
+        .send(.seedPendingInteractionsIfNeeded)
+      }
+      .onChange(of: \.isDashboardVisible) { _, state in
+        state.isDashboardVisible ? .send(.seedPendingInteractionsIfNeeded) : .none
+      }
+      .onChange(of: \.currentViewingSessionID) { _, state in
+        .run { [push, current = state.currentViewingSessionID] _ in
+          push.setCurrentSession(current)
+        }
+      }
+  }
+
+  @ReducerBuilder<State, Action>
+  private var base: some ReducerOf<Self> {
     Scope(state: \.onboarding, action: \.onboarding) {
       ConnectionFeature()
     }
@@ -524,6 +552,10 @@ public struct AppFeature {
           // isn't suspending yet, so no background window is needed.
           return state.liveChat != nil ? .send(.liveChat(.persistNow)) : .none
         }
+
+      case .seedPendingInteractionsIfNeeded:
+        guard state.dashboard?.isVisible == true else { return .none }
+        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
 
       case .backgroundGraceExpired:
         // The background window ran out while still backgrounded. Final flush, then cancel
@@ -986,9 +1018,9 @@ public struct AppFeature {
           : .none
         let activeProfile = running ? Self.activeWorkflowProfileName(state.liveChat) : nil
         state.settings?.activeWorkflowProfileName = activeProfile
-        if state.settings?.capabilityManagement != nil {
-          state.settings?.capabilityManagement?.hasActiveWorkflow =
-            state.settings?.capabilityManagement?.profileName == activeProfile
+        if var capabilityManagement = state.settings?.capabilityManagement {
+          capabilityManagement.hasActiveWorkflow = capabilityManagement.profileName == activeProfile
+          state.settings?.capabilityManagement = capabilityManagement
         }
         // A DETACHED slot (no marker in the path — the user popped to the list) only
         // outlives the pop while its turn runs. The turn ending — `message.complete`,
@@ -1010,6 +1042,11 @@ public struct AppFeature {
         return .none
       }
     }
+  }
+
+@ReducerBuilder<State, Action>
+  private var core: some ReducerOf<Self> {
+    base
     .ifLet(\.connectionFailed, action: \.connectionFailed) {
       ConnectionFailedFeature()
     }
@@ -1033,35 +1070,6 @@ public struct AppFeature {
     }
     .ifLet(\.liveChat, action: \.liveChat) {
       ChatFeature()
-    }
-    .forEach(\.path, action: \.path) {
-      ChatScreen()
-    }
-    // Keep the push bridge's "currently viewing" session in sync with the slot + nav stack
-    // (one source of truth, evaluated AFTER the child reducers so pops/dismissals AND a new chat
-    // resolving its `liveSessionID` are reflected) so a foreground push for the on-screen session
-    // is suppressed. Opening, popping back to the list, and id-resolution all flow through here.
-    .onChange(of: \.currentViewingSessionID) { _, newValue in
-      Reduce { _, _ in
-        .run { [push] _ in push.setCurrentSession(newValue) }
-      }
-    }
-    // Hermes has no global pending-interaction read endpoint. While Home is visible, project
-    // the process-local approval knowledge AppFeature already owns into its card; the child
-    // action also cancels the unsupported network probe so a late response cannot erase it.
-    .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
-      Reduce { state, _ in
-        guard state.dashboard?.isVisible == true else { return .none }
-        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
-      }
-    }
-    // A badge may have arrived while another tab was selected. Seed the same process-local
-    // summaries when Home becomes visible rather than waiting for another set mutation.
-    .onChange(of: \.dashboard?.isVisible) { _, isVisible in
-      Reduce { state, _ in
-        guard isVisible == true, state.dashboard != nil else { return .none }
-        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
-      }
     }
   }
 

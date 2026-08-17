@@ -9,6 +9,11 @@ import ProjectDescription
 // Debug-only server preset (empty by default; baked into the Debug Info.plist).
 let debugServerURL = Environment.serverUrl.getString(default: "")
 
+// CI/sideload overrides: a different bundle id/display name lets a CI-built app install
+// alongside the normal Hermes Control without replacing it.
+let bundleID = Environment.bundleId.getString(default: "com.jbenzaquen.hermesioscontrol")
+let displayName = Environment.displayName.getString(default: "Hermes Control")
+
 // Apple team for device/TestFlight signing. Empty for simulator-only work (simulator
 // builds pass CODE_SIGNING_ALLOWED=NO).
 let developmentTeam = Environment.developmentTeam.getString(default: "")
@@ -27,7 +32,7 @@ let project = Project(
       name: "HermesMobile",
       destinations: [.iPhone],
       product: .app,
-      bundleId: "com.jbenzaquen.hermesioscontrol",
+      bundleId: bundleID,
       deploymentTargets: .iOS("18.0"),
       infoPlist: .extendingDefault(with: [
         // Wire the bundle version/short-version to the build settings below so a
@@ -35,7 +40,7 @@ let project = Project(
         // default otherwise hardcodes CFBundleVersion = 1, ignoring the setting).
         "CFBundleShortVersionString": "$(MARKETING_VERSION)",
         "CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
-        "CFBundleDisplayName": "Hermes Control",
+        "CFBundleDisplayName": .string(displayName),
         "UILaunchScreen": ["UIColorName": ""],
         "HermesDefaultServerURL": .string(debugServerURL),
         // The app connects to user-specified self-hosted servers over http (Tailscale/LAN),

@@ -119,7 +119,7 @@ struct CapabilityManagementView: View {
   private var visibleItems: [CapabilityItemPresentation] {
     switch store.selectedSegment {
     case .skills:
-      store.filteredSkills.map(skillPresentation)
+      store.filteredSkills.map { skillPresentation($0) }
     case .toolsets:
       store.filteredToolsets.map(toolsetPresentation)
     case .mcpServers:

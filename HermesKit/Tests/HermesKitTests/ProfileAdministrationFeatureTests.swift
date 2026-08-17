@@ -97,7 +97,7 @@ struct ProfileAdministrationFeatureTests {
     )))
     await store.receive(\.delegate.profileRenamed)
 
-    await store.send(.profileEditor(.presented(.delegate(.deleted(name: "work-2"))))
+    await store.send(.profileEditor(.presented(.delegate(.deleted(name: "work-2")))))
     #expect(store.state.profileEditor == nil)
     await store.receive(\.delegate.profileDeleted)
   }

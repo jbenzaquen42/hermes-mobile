@@ -825,7 +825,10 @@ public struct CapabilityManagementFeature {
               state.selection?.toolsets[name] != enabled else { return .none }
         state.toolsets[index].enabled = enabled
         state.selection?.toolsets[name] = enabled
-        state.selection?.toolsetsPinned = state.selection?.toolsets.values.contains(true) == true
+        if var selection = state.selection {
+          selection.toolsetsPinned = selection.toolsets.values.contains(true)
+          state.selection = selection
+        }
         Self.refreshSelectedDetail(in: &state)
         state.saveState = .idle
         return .none
@@ -917,11 +920,14 @@ public struct CapabilityManagementFeature {
       case .confirmationDialog(.presented(.discardAndReload)):
         return .send(.reloadCatalog)
 
+      case .confirmationDialog(.dismiss):
+        state.confirmationDialog = nil
+        return .none
+
       case .confirmationDialog, .delegate:
         return .none
       }
     }
-    .ifLet(\.\$confirmationDialog, action: \.confirmationDialog)
   }
 
   private func startSave(_ state: inout State) -> Effect<Action> {

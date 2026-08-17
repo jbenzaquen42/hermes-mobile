@@ -133,9 +133,9 @@ struct MemoryManagementView: View {
     guard store.capacity == nil else { return nil }
     switch store.capacityReporting {
     case .notReportedByServer:
-      "This server does not report live character usage or configured limits."
+      return "This server does not report live character usage or configured limits."
     @unknown default:
-      "Capacity details are not available for this server response."
+      return "Capacity details are not available for this server response."
     }
   }
 
@@ -206,9 +206,9 @@ struct MemoryManagementView: View {
   ) -> MemoryMutationPresentation {
     let message = reportMessage(report, includeReloadErrors: false)
     switch report.action {
-    case .updated: .saved(message)
-    case .deleted: .deleted(message)
-    case .archived: .archived(message)
+    case .updated: return MemoryMutationPresentation.saved(message)
+    case .deleted: return MemoryMutationPresentation.deleted(message)
+    case .archived: return MemoryMutationPresentation.archived(message)
     }
   }
 

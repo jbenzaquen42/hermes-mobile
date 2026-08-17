@@ -144,7 +144,7 @@ struct ProfileEditorFeatureTests {
     #expect(transient.state.describeSupported == nil)
   }
 
-  @Test func explicitSaveUsesReplaceSemanticsAndReportsPartialResult() async {
+  @Test func explicitSaveUsesReplaceSemanticsAndReportsPartialResult() async throws {
     let captured = LockIsolated<ProfileConfigureRequest?>(nil)
     let draftStore = ProfileDraftClient.inMemory()
     let authoritative: ProfileDescription = {

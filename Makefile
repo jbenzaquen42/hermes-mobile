@@ -16,7 +16,7 @@ test: ## Run the HermesKit test suite (streamed output)
 build: ## Build the app for an iOS Simulator (no signing)
 	xcodebuild build -workspace HermesMobile.xcworkspace -scheme HermesMobile \
 		-configuration Debug -destination 'generic/platform=iOS Simulator' \
-		CODE_SIGNING_ALLOWED=NO -quiet
+		CODE_SIGNING_ALLOWED=NO -skipMacroValidation -quiet
 
 run: ## Build, install, and launch on a simulator (SIM_NAME overrides device)
 	./scripts/run-sim.sh

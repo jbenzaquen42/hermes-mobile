@@ -169,7 +169,6 @@ public struct KanbanFeature {
     case saveEditorTapped
     case saveEditorResponse(Result<Void, RESTError>)
     case deleteTapped(String)
-    case deleteConfirmed(String)
     case deleteResponse(id: String, error: RESTError?)
     case searchQueryChanged(String)
     case errorBannerDismissed

@@ -38,8 +38,8 @@ final class AutomationsSnapshotTests: SnapshotTestCase {
           state: "paused"
         ),
       ],
-      listLoadState: .loaded,
-      writeSupported: true
+      writeSupported: true,
+      listLoadState: .loaded
     )
 
     let view = NavigationStack {
