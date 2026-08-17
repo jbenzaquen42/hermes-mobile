@@ -917,11 +917,14 @@ public struct CapabilityManagementFeature {
       case .confirmationDialog(.presented(.discardAndReload)):
         return .send(.reloadCatalog)
 
+      case .confirmationDialog(.dismiss):
+        state.confirmationDialog = nil
+        return .none
+
       case .confirmationDialog, .delegate:
         return .none
       }
     }
-    .ifLet(\.\$confirmationDialog, action: \.confirmationDialog)
   }
 
   private func startSave(_ state: inout State) -> Effect<Action> {
