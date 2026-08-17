@@ -206,9 +206,9 @@ struct MemoryManagementView: View {
   ) -> MemoryMutationPresentation {
     let message = reportMessage(report, includeReloadErrors: false)
     switch report.action {
-    case .updated: .saved(message)
-    case .deleted: .deleted(message)
-    case .archived: .archived(message)
+    case .updated: return MemoryMutationPresentation.saved(message)
+    case .deleted: return MemoryMutationPresentation.deleted(message)
+    case .archived: return MemoryMutationPresentation.archived(message)
     }
   }
 
