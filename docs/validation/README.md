@@ -1,6 +1,6 @@
 # Validation handoff
 
-Implementation is merged through Phase 7. The Windows development host could perform source,
+Implementation is merged through Phase 8. The Windows development host could perform source,
 contract, diff, and security reviews, but it could not run Swift, Tuist, Xcode, the iOS
 simulator, signing, or physical-device checks.
 
@@ -19,8 +19,7 @@ in [`../plans/20260814-hermes-control-baseline.md`](../plans/20260814-hermes-con
 
 ## Next implementation sequence
 
-1. Implement Phase 8 Notifications and polish.
-2. Run Validation Phases 1–3 in order once the Mac is ready.
+1. Run Validation Phases 1–3 in order once the Mac is ready.
 
 Do not mark a phase ledger complete solely because its source PR merged. If Mac compilation
 finds integration errors in a phase, fix forward in a small PR or revert that phase's isolated
