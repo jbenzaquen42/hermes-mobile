@@ -1050,7 +1050,7 @@ public struct AppFeature {
     // the process-local approval knowledge AppFeature already owns into its card; the child
     // action also cancels the unsupported network probe so a late response cannot erase it.
     .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
-      Reduce { state, _ in
+      Reduce { (state: inout State, _: Action) -> Effect<Action> in
         guard state.dashboard?.isVisible == true else { return .none }
         return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
       }
@@ -1058,7 +1058,7 @@ public struct AppFeature {
     // A badge may have arrived while another tab was selected. Seed the same process-local
     // summaries when Home becomes visible rather than waiting for another set mutation.
     .onChange(of: \.dashboard?.isVisible) { _, isVisible in
-      Reduce { state, _ in
+      Reduce { (state: inout State, _: Action) -> Effect<Action> in
         guard isVisible == true, state.dashboard != nil else { return .none }
         return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
       }

@@ -188,7 +188,6 @@ public struct AutomationsFeature {
     case resumeTapped(String)
     case jobActionFinished(id: String, error: RESTError?)
     case deleteTapped(String)
-    case deleteConfirmed(String)
     case deleteResponse(id: String, error: RESTError?)
     case errorBannerDismissed
     case confirmationDialog(PresentationAction<Dialog>)
