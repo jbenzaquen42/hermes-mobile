@@ -1018,9 +1018,9 @@ public struct AppFeature {
           : .none
         let activeProfile = running ? Self.activeWorkflowProfileName(state.liveChat) : nil
         state.settings?.activeWorkflowProfileName = activeProfile
-        if state.settings?.capabilityManagement != nil {
-          state.settings?.capabilityManagement?.hasActiveWorkflow =
-            state.settings?.capabilityManagement?.profileName == activeProfile
+        if var capabilityManagement = state.settings?.capabilityManagement {
+          capabilityManagement.hasActiveWorkflow = capabilityManagement.profileName == activeProfile
+          state.settings?.capabilityManagement = capabilityManagement
         }
         // A DETACHED slot (no marker in the path — the user popped to the list) only
         // outlives the pop while its turn runs. The turn ending — `message.complete`,
