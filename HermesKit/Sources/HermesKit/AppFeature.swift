@@ -292,6 +292,9 @@ public struct AppFeature {
     /// (`.teardownSocketOnly`), keeping the chat state in memory for the #26-preserving
     /// foreground re-hydrate.
     case backgroundGraceExpired
+    /// Internal: seed Home's pending-interaction card when process-local approval data or
+    /// dashboard visibility changes.
+    case seedPendingInteractionsIfNeeded
     case reauth(PresentationAction<ReauthFeature.Action>)
   }
 
@@ -530,6 +533,10 @@ public struct AppFeature {
           // isn't suspending yet, so no background window is needed.
           return state.liveChat != nil ? .send(.liveChat(.persistNow)) : .none
         }
+
+      case .seedPendingInteractionsIfNeeded:
+        guard state.dashboard?.isVisible == true else { return .none }
+        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
 
       case .backgroundGraceExpired:
         // The background window ran out while still backgrounded. Final flush, then cancel
@@ -1056,18 +1063,12 @@ public struct AppFeature {
     // the process-local approval knowledge AppFeature already owns into its card; the child
     // action also cancels the unsupported network probe so a late response cannot erase it.
     .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
-      Reduce { (state: inout State, _: Action) -> Effect<Action> in
-        guard state.dashboard?.isVisible == true else { return .none }
-        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
-      }
+      .send(.seedPendingInteractionsIfNeeded)
     }
     // A badge may have arrived while another tab was selected. Seed the same process-local
     // summaries when Home becomes visible rather than waiting for another set mutation.
     .onChange(of: \.isDashboardVisible) { _, isVisible in
-      Reduce { (state: inout State, _: Action) -> Effect<Action> in
-        guard isVisible, state.dashboard != nil else { return .none }
-        return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
-      }
+      isVisible ? .send(.seedPendingInteractionsIfNeeded) : .none
     }
   }
 
