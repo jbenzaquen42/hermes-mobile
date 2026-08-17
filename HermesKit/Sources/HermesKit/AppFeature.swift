@@ -323,6 +323,11 @@ public struct AppFeature {
       .onChange(of: \.isDashboardVisible) { _, state in
         state.isDashboardVisible ? .send(.seedPendingInteractionsIfNeeded) : .none
       }
+      .onChange(of: \.currentViewingSessionID) { _, state in
+        .run { [push, current = state.currentViewingSessionID] _ in
+          push.setCurrentSession(current)
+        }
+      }
   }
 
   @ReducerBuilder<State, Action>
@@ -1060,15 +1065,6 @@ public struct AppFeature {
     }
     .forEach(\.path, action: \.path) {
       ChatScreen()
-    }
-    // Keep the push bridge's "currently viewing" session in sync with the slot + nav stack
-    // (one source of truth, evaluated AFTER the child reducers so pops/dismissals AND a new chat
-    // resolving its `liveSessionID` are reflected) so a foreground push for the on-screen session
-    // is suppressed. Opening, popping back to the list, and id-resolution all flow through here.
-    .onChange(of: \.currentViewingSessionID) { _, state in
-      .run { [push, current = state.currentViewingSessionID] _ in
-        push.setCurrentSession(current)
-      }
     }
   }
 
