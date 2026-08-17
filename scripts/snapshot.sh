@@ -48,7 +48,7 @@ run() {
     -workspace "$WORKSPACE" -scheme "$SCHEME" \
     -destination "id=$SIM_UDID" \
     -only-testing:HermesMobileTests \
-    CODE_SIGNING_ALLOWED=NO
+    CODE_SIGNING_ALLOWED=NO -skipMacroValidation
 }
 
 if [ "${RECORD:-0}" = "1" ]; then
