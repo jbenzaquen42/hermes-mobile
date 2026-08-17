@@ -825,7 +825,10 @@ public struct CapabilityManagementFeature {
               state.selection?.toolsets[name] != enabled else { return .none }
         state.toolsets[index].enabled = enabled
         state.selection?.toolsets[name] = enabled
-        state.selection?.toolsetsPinned = state.selection?.toolsets.values.contains(true) == true
+        if var selection = state.selection {
+          selection.toolsetsPinned = selection.toolsets.values.contains(true)
+          state.selection = selection
+        }
         Self.refreshSelectedDetail(in: &state)
         state.saveState = .idle
         return .none

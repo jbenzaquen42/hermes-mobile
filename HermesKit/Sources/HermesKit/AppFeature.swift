@@ -193,6 +193,12 @@ public struct AppFeature {
       }
     }
 
+    /// Whether the dashboard child is currently visible. A computed key path keeps the
+    /// `.onChange` type-checker happy without optional-chaining through a large state type.
+    public var isDashboardVisible: Bool {
+      dashboard?.isVisible ?? false
+    }
+
     /// Which root branch the app shell renders. The precedence is **logic, not layout**, so it
     /// lives here rather than in `AppView`: the connection-failed screen (#62) is reachable
     /// purely by sitting between the `autoConnecting` spinner and the onboarding fallback, and
@@ -1057,9 +1063,9 @@ public struct AppFeature {
     }
     // A badge may have arrived while another tab was selected. Seed the same process-local
     // summaries when Home becomes visible rather than waiting for another set mutation.
-    .onChange(of: \.dashboard?.isVisible) { _, isVisible in
+    .onChange(of: \.isDashboardVisible) { _, isVisible in
       Reduce { (state: inout State, _: Action) -> Effect<Action> in
-        guard isVisible == true, state.dashboard != nil else { return .none }
+        guard isVisible, state.dashboard != nil else { return .none }
         return .send(.dashboard(.pendingInteractionsUpdated(Self.pendingApprovals(in: state))))
       }
     }
