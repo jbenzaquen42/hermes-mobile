@@ -14,6 +14,8 @@ public struct SettingsFeature {
     public var token: String
     /// Transient confirmation after saving the token.
     public var savedConfirmation: Bool
+    /// The app's short version string, loaded through `PushClient` on appearance.
+    public var appVersion: String
     /// Live debug log, newest last; fed by `DebugLogClient`.
     public var log: [GatewayLogEntry]
     /// Whether the connected agent exposes the `hermes-push` plugin (passed down from the
@@ -36,6 +38,8 @@ public struct SettingsFeature {
     public var pushPlugin: PushPluginInfo?
     /// Drives the plugin-update row: button state and the result label under it.
     public var pluginUpdate: PluginUpdateStatus
+    /// Device-local push event presentation preferences (which push categories alert here).
+    public var pushEventPreferences: PushEventPreferences
     /// Running-turn composer policy, persisted as a device-local preference. These are
     /// seeded by `SessionListFeature` when the sheet opens so controls paint correctly.
     public var midTurnBehavior: ChatFeature.MidTurnBehavior
@@ -84,12 +88,14 @@ public struct SettingsFeature {
 
     public init(
       connection: ServerConnection,
+      appVersion: String = "",
       pushAvailable: Bool = true,
       notificationsEnabled: Bool = false,
       notificationsDenied: Bool = false,
       testPushStatus: TestPushStatus = .idle,
       pushPlugin: PushPluginInfo? = nil,
       pluginUpdate: PluginUpdateStatus = .idle,
+      pushEventPreferences: PushEventPreferences = .default,
       midTurnBehavior: ChatFeature.MidTurnBehavior = .steer,
       queueingEnabled: Bool = false,
       profiles: IdentifiedArrayOf<ProfileAdminSummary> = [],
@@ -103,6 +109,7 @@ public struct SettingsFeature {
       self.connection = connection
       self.token = connection.token ?? ""
       self.savedConfirmation = false
+      self.appVersion = appVersion
       self.log = []
       self.pushAvailable = pushAvailable
       self.notificationsEnabled = notificationsEnabled
@@ -110,6 +117,7 @@ public struct SettingsFeature {
       self.testPushStatus = testPushStatus
       self.pushPlugin = pushPlugin
       self.pluginUpdate = pluginUpdate
+      self.pushEventPreferences = pushEventPreferences
       self.midTurnBehavior = midTurnBehavior
       self.queueingEnabled = queueingEnabled
       self.profiles = profiles
@@ -161,6 +169,8 @@ public struct SettingsFeature {
     case authorizationStatusLoaded(PushAuthorizationStatus)
     /// User flipped the "Notify me about approvals" toggle.
     case notificationsToggled(Bool)
+    /// User changed a push event presentation preference.
+    case pushEventPreferenceChanged(PushEventPreferences)
     /// Result of the contextual permission prompt (`true` ⇒ granted).
     case authorizationResult(Bool)
     /// User tapped "Send test notification".
@@ -172,6 +182,10 @@ public struct SettingsFeature {
     case askAgentToInstallTapped
     /// What the plugin hub reports about `hermes-push`, read on appearance.
     case pushPluginInfoLoaded(PushPluginInfo)
+    /// Device-local push event preferences loaded from storage on appearance.
+    case pushEventPreferencesLoaded(PushEventPreferences)
+    /// The app version string, loaded through the push client on appearance.
+    case appVersionLoaded(String)
     /// User tapped "Update plugin" — asks the agent to `git pull` it in place.
     case updatePluginTapped
     /// Outcome of that pull.
@@ -259,6 +273,12 @@ public struct SettingsFeature {
           // an unreachable/old agent maps to `.unknown`, which offers nothing.
           .run { [rest, connection = state.connection] send in
             await send(.pushPluginInfoLoaded(rest.pushPluginInfo(connection)))
+          },
+          .run { [preferences] send in
+            await send(.pushEventPreferencesLoaded(preferences.loadPushEventPreferences()))
+          },
+          .run { [push] send in
+            await send(.appVersionLoaded(push.appVersion()))
           },
           .send(.loadProfiles)
         )
@@ -422,6 +442,19 @@ public struct SettingsFeature {
           state.notificationsEnabled = false
           state.notificationsDenied = false
         }
+        return .none
+
+      case let .appVersionLoaded(version):
+        state.appVersion = version
+        return .none
+
+      case let .pushEventPreferencesLoaded(preferences):
+        state.pushEventPreferences = preferences
+        return .none
+
+      case let .pushEventPreferenceChanged(newPreferences):
+        state.pushEventPreferences = newPreferences
+        preferences.savePushEventPreferences(newPreferences)
         return .none
 
       case let .notificationsToggled(isOn):

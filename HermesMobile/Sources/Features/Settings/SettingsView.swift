@@ -130,6 +130,9 @@ struct SettingsView: View {
               }
             }
           }
+          Toggle("Turn complete", isOn: turnCompleteBinding)
+          Toggle("Failures and errors", isOn: failureBinding)
+          Toggle("Subagent activity", isOn: subagentBinding)
           Button("Send test notification") { store.send(.sendTestPushTapped) }
             .disabled(store.testPushStatus == .sending)
           switch store.testPushStatus {
@@ -156,10 +159,23 @@ struct SettingsView: View {
         Text("Notifications")
       } footer: {
         if store.pushAvailable {
-          Text("Get a push when Hermes needs your approval, even while the app is closed.")
+          Text("Choose which push categories alert on this iPhone. Approvals are always shown when notifications are enabled.")
         } else {
-          Text("Needs the hermes-push plugin running on your agent.")
+          Text("Needs the hermes-push plugin running on your agent. Personal Team builds without an APNs entitlement can still use Hermes Control; notifications are simply unavailable.")
         }
+      }
+
+      Section {
+        LabeledContent("App", value: "Hermes Control")
+        LabeledContent("Version", value: store.appVersion.isEmpty ? "—" : store.appVersion)
+        Label("Companion for the open-source Hermes Agent", systemImage: "info.circle")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+          .accessibilityElement(children: .combine)
+      } header: {
+        Text("About")
+      } footer: {
+        Text("Hermes Control is an independent iOS companion. Agent and server are separate open-source projects.")
       }
 
       Section {
@@ -193,6 +209,39 @@ struct SettingsView: View {
       )
     }
     .task { store.send(.task) }
+  }
+
+  private var turnCompleteBinding: Binding<Bool> {
+    Binding(
+      get: { store.pushEventPreferences.turnComplete },
+      set: { newValue in
+        var preferences = store.pushEventPreferences
+        preferences.turnComplete = newValue
+        store.send(.pushEventPreferenceChanged(preferences))
+      }
+    )
+  }
+
+  private var failureBinding: Binding<Bool> {
+    Binding(
+      get: { store.pushEventPreferences.failure },
+      set: { newValue in
+        var preferences = store.pushEventPreferences
+        preferences.failure = newValue
+        store.send(.pushEventPreferenceChanged(preferences))
+      }
+    )
+  }
+
+  private var subagentBinding: Binding<Bool> {
+    Binding(
+      get: { store.pushEventPreferences.subagent },
+      set: { newValue in
+        var preferences = store.pushEventPreferences
+        preferences.subagent = newValue
+        store.send(.pushEventPreferenceChanged(preferences))
+      }
+    )
   }
 
   /// Why the update matters, naming both versions when the agent reported one. Kept in the

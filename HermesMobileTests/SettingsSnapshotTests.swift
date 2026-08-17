@@ -195,3 +195,27 @@ final class SettingsSnapshotTests: SnapshotTestCase {
     assertSnapshot(of: view, as: deviceImage())
   }
 }
+
+  func testSettingsPushEventPreferences() {
+    let initial = SettingsFeature.State(
+      connection: connection,
+      pushAvailable: true,
+      notificationsEnabled: true,
+      pushEventPreferences: PushEventPreferences(
+        approval: true,
+        turnComplete: true,
+        failure: true,
+        subagent: true
+      )
+    )
+    let view = NavigationStack {
+      SettingsView(
+        store: Store(initialState: initial) { SettingsFeature() } withDependencies: {
+          $0.debugLog = .testValue
+          $0.hermesProfileAdmin.list = { _, _ in [] }
+          $0.push = PushClient.inMemory(granted: true, status: .authorized).client
+        }
+      )
+    }
+    assertSnapshot(of: view, as: deviceImage())
+  }

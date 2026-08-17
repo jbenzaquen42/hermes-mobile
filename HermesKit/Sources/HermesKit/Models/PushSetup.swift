@@ -173,3 +173,27 @@ public func pushPromptSnoozeDays(laterCount: Int) -> Int {
   // After `n` steps `a` is Fib(n+1): n=1→1, 2→2, 3→3, 4→5, 5→8, 6→13, 7→21, 8→34, 9→55.
   return min(a, 60)
 }
+
+/// Device-local push event preferences. These control which push categories this iPhone
+/// should surface as alerts; they are client-side presentation preferences and do not change
+/// what the server sends.
+public struct PushEventPreferences: Equatable, Sendable, Codable {
+  public var approval: Bool
+  public var turnComplete: Bool
+  public var failure: Bool
+  public var subagent: Bool
+
+  public init(
+    approval: Bool = true,
+    turnComplete: Bool = false,
+    failure: Bool = true,
+    subagent: Bool = false
+  ) {
+    self.approval = approval
+    self.turnComplete = turnComplete
+    self.failure = failure
+    self.subagent = subagent
+  }
+
+  public static let `default` = PushEventPreferences()
+}

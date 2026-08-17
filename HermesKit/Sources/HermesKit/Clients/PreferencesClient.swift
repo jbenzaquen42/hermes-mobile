@@ -47,6 +47,12 @@ public struct PreferencesClient: Sendable {
   public var loadPushPromptSnooze: @Sendable () -> (count: Int, until: Date)? = { nil }
   public var savePushPromptSnooze: @Sendable (_ count: Int, _ until: Date) -> Void
   public var clearPushPromptSnooze: @Sendable () -> Void
+  /// Device-local push event presentation preferences. Defaults to showing approvals and
+  /// failures; turn-complete and subagent pushes are opt-in (the generic-body privacy rule
+  /// means these are only used to decide whether to present a banner/badge on this device).
+  public var loadPushEventPreferences: @Sendable () -> PushEventPreferences = { .default }
+  public var savePushEventPreferences: @Sendable (_ preferences: PushEventPreferences) -> Void
+  public var clearPushEventPreferences: @Sendable () -> Void
 }
 
 public extension PreferencesClient {
@@ -81,6 +87,7 @@ public extension PreferencesClient {
     let pushTokenKey = "hermes.push-device-token"
     let pushSnoozeCountKey = "hermes.push-prompt-snooze-count"
     let pushSnoozeUntilKey = "hermes.push-prompt-snooze-until"
+    let pushEventPrefsKey = "hermes.push-event-preferences"
     // UserDefaults is documented thread-safe but not Sendable.
     nonisolated(unsafe) let store = defaults
     return PreferencesClient(
@@ -123,6 +130,28 @@ public extension PreferencesClient {
       clearPushPromptSnooze: {
         store.removeObject(forKey: pushSnoozeCountKey)
         store.removeObject(forKey: pushSnoozeUntilKey)
+      },
+      loadPushEventPreferences: {
+        guard let raw = store.dictionary(forKey: pushEventPrefsKey) as? [String: Bool] else {
+          return .default
+        }
+        return PushEventPreferences(
+          approval: raw["approval"] ?? true,
+          turnComplete: raw["turnComplete"] ?? false,
+          failure: raw["failure"] ?? true,
+          subagent: raw["subagent"] ?? false
+        )
+      },
+      savePushEventPreferences: { preferences in
+        store.set([
+          "approval": preferences.approval,
+          "turnComplete": preferences.turnComplete,
+          "failure": preferences.failure,
+          "subagent": preferences.subagent,
+        ], forKey: pushEventPrefsKey)
+      },
+      clearPushEventPreferences: {
+        store.removeObject(forKey: pushEventPrefsKey)
       }
     )
   }
@@ -138,6 +167,7 @@ public extension PreferencesClient {
     let selectedProfile = LockIsolated<String?>(nil)
     let pushToken = LockIsolated<String?>(nil)
     let pushSnooze = LockIsolated<(count: Int, until: Date)?>(nil)
+    let pushEventPrefs = LockIsolated<PushEventPreferences>(.default)
     return PreferencesClient(
       loadServerURL: { box.value },
       saveServerURL: { url in box.setValue(url) },
@@ -162,7 +192,10 @@ public extension PreferencesClient {
       clearPushDeviceToken: { pushToken.setValue(nil) },
       loadPushPromptSnooze: { pushSnooze.value },
       savePushPromptSnooze: { count, until in pushSnooze.setValue((count: count, until: until)) },
-      clearPushPromptSnooze: { pushSnooze.setValue(nil) }
+      clearPushPromptSnooze: { pushSnooze.setValue(nil) },
+      loadPushEventPreferences: { pushEventPrefs.value },
+      savePushEventPreferences: { pushEventPrefs.setValue($0) },
+      clearPushEventPreferences: { pushEventPrefs.setValue(.default) }
     )
   }
 }
