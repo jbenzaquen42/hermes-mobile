@@ -317,6 +317,9 @@ public struct AppFeature {
 
   public var body: some ReducerOf<Self> {
     core
+      .forEach(\.path, action: \.path) {
+        ChatScreen()
+      }
       .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
         .send(.seedPendingInteractionsIfNeeded)
       }
@@ -331,7 +334,7 @@ public struct AppFeature {
   }
 
   @ReducerBuilder<State, Action>
-  private var core: some ReducerOf<Self> {
+  private var base: some ReducerOf<Self> {
     Scope(state: \.onboarding, action: \.onboarding) {
       ConnectionFeature()
     }
@@ -1039,6 +1042,11 @@ public struct AppFeature {
         return .none
       }
     }
+  }
+
+@ReducerBuilder<State, Action>
+  private var core: some ReducerOf<Self> {
+    base
     .ifLet(\.connectionFailed, action: \.connectionFailed) {
       ConnectionFailedFeature()
     }
@@ -1062,9 +1070,6 @@ public struct AppFeature {
     }
     .ifLet(\.liveChat, action: \.liveChat) {
       ChatFeature()
-    }
-    .forEach(\.path, action: \.path) {
-      ChatScreen()
     }
   }
 
