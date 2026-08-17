@@ -1,0 +1,83 @@
+name: Hermes Control CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TUIST_BUNDLE_ID: com.jbenzaquen.hermesioscontrol.ci
+  TUIST_DISPLAY_NAME: Hermes Control CI
+
+jobs:
+  validate:
+    name: Validate (tests, build, snapshots)
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tuist
+        run: brew install tuist
+
+      - name: Generate Xcode project
+        run: make setup
+
+      - name: Run HermesKit tests
+        run: make test
+
+      - name: Build for iOS Simulator
+        run: make build
+
+      - name: Run snapshot tests
+        run: make snapshot
+
+  sideload-ipa:
+    name: Build unsigned IPA for SideStore
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tuist
+        run: brew install tuist
+
+      - name: Generate Xcode project
+        run: make setup
+
+      - name: Build unsigned app archive
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -workspace HermesMobile.xcworkspace \
+            -scheme HermesMobile \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/CI.xcarchive \
+            -derivedDataPath build/DerivedData \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned IPA
+        run: |
+          set -euxo pipefail
+          mkdir -p Payload
+          cp -R build/CI.xcarchive/Products/Applications/HermesMobile.app Payload/
+          zip -qry HermesControl-CI.ipa Payload
+          ls -lh HermesControl-CI.ipa
+
+      - name: Upload SideStore IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: HermesControl-CI-IPA
+          path: HermesControl-CI.ipa
+          if-no-files-found: error
