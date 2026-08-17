@@ -320,8 +320,8 @@ public struct AppFeature {
       .onChange(of: \.pendingApprovalSessionIDs) { _, _ in
         .send(.seedPendingInteractionsIfNeeded)
       }
-      .onChange(of: \.isDashboardVisible) { _, isVisible in
-        isVisible ? .send(.seedPendingInteractionsIfNeeded) : .none
+      .onChange(of: \.isDashboardVisible) { _, state in
+        state.isDashboardVisible ? .send(.seedPendingInteractionsIfNeeded) : .none
       }
   }
 
@@ -1065,9 +1065,9 @@ public struct AppFeature {
     // (one source of truth, evaluated AFTER the child reducers so pops/dismissals AND a new chat
     // resolving its `liveSessionID` are reflected) so a foreground push for the on-screen session
     // is suppressed. Opening, popping back to the list, and id-resolution all flow through here.
-    .onChange(of: \.currentViewingSessionID) { _, newValue in
-      Reduce { _, _ in
-        .run { [push] _ in push.setCurrentSession(newValue) }
+    .onChange(of: \.currentViewingSessionID) { _, state in
+      .run { [push, current = state.currentViewingSessionID] _ in
+        push.setCurrentSession(current)
       }
     }
   }
