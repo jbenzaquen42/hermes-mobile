@@ -1,0 +1,98 @@
+name: Build Priv AI Swiftlet IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-privai-swiftlet.yml
+
+concurrency:
+  group: privai-swiftlet-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    name: Build unsigned Priv AI + Swiftlet IPA
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Priv AI
+        uses: actions/checkout@v4
+        with:
+          repository: leonickson1/localLLM
+          path: localLLM
+
+      - name: Checkout Swiftlet beside Priv AI
+        uses: actions/checkout@v4
+        with:
+          repository: leonickson1/Swiftlet
+          path: swiftlet
+
+      - name: Show toolchain and project
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          sw_vers
+          xcodebuild -project localLLM/localLLM.xcodeproj -list
+
+      - name: Resolve Swift packages
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project localLLM/localLLM.xcodeproj
+
+      - name: Build unsigned iPhone app
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -project localLLM/localLLM.xcodeproj \
+            -scheme localLLM \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            PRODUCT_BUNDLE_IDENTIFIER=com.jbenzaquen42.PrivAISwiftlet \
+            INFOPLIST_KEY_CFBundleDisplayName="Priv AI Swiftlet"
+
+      - name: Locate built app
+        id: app
+        run: |
+          set -euxo pipefail
+          APP_PATH=$(find "$PWD/build/DerivedData/Build/Products" -type d -name 'localLLM.app' -path '*Release-iphoneos*' -print -quit)
+          if [ -z "$APP_PATH" ]; then
+            echo 'Could not find localLLM.app'
+            find "$PWD/build/DerivedData/Build/Products" -maxdepth 4 -type d -name '*.app' -print || true
+            exit 1
+          fi
+          echo "path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP_PATH/Info.plist" || true
+          du -sh "$APP_PATH"
+
+      - name: Package SideStore IPA
+        run: |
+          set -euxo pipefail
+          rm -rf Payload PrivAI-Swiftlet-Unsigned.ipa
+          mkdir -p Payload
+          cp -R "${{ steps.app.outputs.path }}" Payload/
+          zip -qry PrivAI-Swiftlet-Unsigned.ipa Payload
+          unzip -l PrivAI-Swiftlet-Unsigned.ipa | head -40
+          ls -lh PrivAI-Swiftlet-Unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrivAI-Swiftlet-SideStore-IPA
+          path: PrivAI-Swiftlet-Unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
